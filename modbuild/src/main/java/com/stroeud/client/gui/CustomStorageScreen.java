@@ -4,6 +4,7 @@ import com.mojang.logging.LogUtils;
 import com.stroeud.container.CustomStorageContainer;
 import com.stroeud.network.NetworkManager;
 import com.stroeud.network.StorageNetworkHandler;
+import com.stroeud.network.packet.SynthesisResultPacket;
 import com.stroeud.storage.CustomStorageData;
 import java.util.AbstractMap;
 import java.util.ArrayList;
@@ -11,6 +12,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
@@ -29,6 +31,7 @@ import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.ClickType;
 import net.minecraft.world.inventory.Slot;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.ItemLike;
@@ -49,12 +52,17 @@ extends AbstractContainerScreen<CustomStorageContainer> {
     private static final float ITEM_COUNT_TEXT_SCALE = 0.5f;
     private static final int ITEM_COUNT_TEXT_COLOR = 0xFFFFFF;
 
-    // 顶部共享搜索框
+    // 搜索框(背包栏上方,左移)
     private static final int SEARCH_BOX_X = 8;
-    private static final int SEARCH_BOX_Y = 20;
-    private static final int SEARCH_BOX_WIDTH = 300;
-    private static final int CLEAR_BUTTON_X = 312;
-    private static final int CLEAR_BUTTON_Y = 19;
+    private static final int SEARCH_BOX_Y = 156;
+    private static final int SEARCH_BOX_WIDTH = 110;
+    private static final int CLEAR_BUTTON_X = SEARCH_BOX_X + SEARCH_BOX_WIDTH + 4;
+    private static final int CLEAR_BUTTON_Y = SEARCH_BOX_Y - 1;
+    // 右下角内嵌合成视图面板
+    private static final int RECIPE_PANEL_X = 184;
+    private static final int RECIPE_PANEL_Y = 156;
+    private static final int RECIPE_PANEL_WIDTH = 162;
+    private static final int RECIPE_PANEL_HEIGHT = 108;
 
     // 左面板:仓库 9x6
     private static final int STORAGE_GRID_START_X = 8;
@@ -62,53 +70,51 @@ extends AbstractContainerScreen<CustomStorageContainer> {
     private static final int STORAGE_COLS = 9;
     private static final int STORAGE_ROWS = 6;
     private static final int STORAGE_ITEMS_PER_PAGE = 54;
-    private static final int STORAGE_PREV_PAGE_X = 100;
-    private static final int STORAGE_PREV_PAGE_Y = 156;
-    private static final int STORAGE_NEXT_PAGE_X = 164;
-    private static final int STORAGE_NEXT_PAGE_Y = 156;
-    private static final int STORAGE_PAGE_INFO_CENTER_X = 142;
-    private static final int STORAGE_PAGE_INFO_Y = 158;
+    private static final int STORAGE_PREV_PAGE_X = 55;
+    private static final int STORAGE_NEXT_PAGE_X = 103;
+    private static final int STORAGE_PAGE_INFO_X = 79;
+    private static final int STORAGE_PAGE_INFO_Y = 22;
     // 玩家背包(左下)
     private static final int PLAYER_INV_START_X = 8;
     private static final int PLAYER_INV_START_Y = 180;
     private static final int PLAYER_HOTBAR_START_Y = 238;
-    // 右面板:合成目录 12x6
+    // 右面板:合成目录 9x6(与左侧一致)
     private static final int CATALOG_PANEL_X = 176;
     private static final int CATALOG_GRID_START_X = 184;
     private static final int CATALOG_GRID_START_Y = 40;
-    private static final int CATALOG_COLS = 12;
+    private static final int CATALOG_COLS = 9;
     private static final int CATALOG_ROWS = 6;
-    private static final int CATALOG_ITEMS_PER_PAGE = 72;
-    private static final int CATALOG_PREV_PAGE_X = 184;
-    private static final int CATALOG_PREV_PAGE_Y = 156;
-    private static final int CATALOG_NEXT_PAGE_X = 356;
-    private static final int CATALOG_NEXT_PAGE_Y = 156;
-    private static final int CATALOG_PAGE_INFO_CENTER_X = 292;
-    private static final int CATALOG_PAGE_INFO_Y = 158;
+    private static final int CATALOG_ITEMS_PER_PAGE = 54;
+    private static final int CATALOG_PREV_PAGE_X = 231;
+    private static final int CATALOG_NEXT_PAGE_X = 279;
+    private static final int CATALOG_PAGE_INFO_X = 265;
+    private static final int CATALOG_PAGE_INFO_Y = 22;
 
     private int leftPos;
     private int topPos;
     private Map<String, Long> storageData = new HashMap<String, Long>();
+    private List<Map.Entry<String, Long>> cachedFilteredStorage = null;
     private int currentPage = 0;
     private int maxPage = 0;
     private String searchFilter = "";
     private long totalItems = 0L;
     private int totalTypes = 0;
     private EditBox searchBox;
-    private Button prevPageButton;
-    private Button nextPageButton;
     private Button clearSearchButton;
     // 右侧合成目录
     private List<ItemStack> catalogAllItems = new ArrayList<ItemStack>();
     private List<ItemStack> catalogFilteredItems = new ArrayList<ItemStack>();
     private int catalogPage = 0;
     private int catalogMaxPage = 0;
-    private Button catalogPrevPageButton;
-    private Button catalogNextPageButton;
     private long lastClientUpdateTime = 0L;
-    private boolean isInitialLoad = true;
+    private static final Map<BlockPos, StoredState> STATE_CACHE = new HashMap<BlockPos, StoredState>();
     private static CustomStorageScreen currentInstance = null;
+
+    public static CustomStorageScreen getCurrentInstance() {
+        return currentInstance;
+    }
     private final BlockPos blockPos;
+    private final RecipeView recipeView;
     private int syncTicker = 0;
     private final Map<String, ItemStack> itemStackCache = new HashMap<String, ItemStack>();
     private int lastMouseX = -1;
@@ -118,35 +124,47 @@ extends AbstractContainerScreen<CustomStorageContainer> {
 
     public CustomStorageScreen(CustomStorageContainer container, Inventory playerInventory, Component title) {
         super(container, playerInventory, title);
-        this.imageWidth = 408;
-        this.imageHeight = 272;
+        this.imageWidth = 354;
+        this.imageHeight = 264;
         this.blockPos = container.getBlockPos();
+        this.recipeView = new RecipeView(this.blockPos);
         currentInstance = this;
     }
 
     protected void init() {
         super.init();
-        this.leftPos = (this.width - 408) / 2;
-        this.topPos = (this.height - 272) / 2;
+        this.leftPos = (this.width - 354) / 2;
+        this.topPos = (this.height - 264) / 2;
+        StoredState saved = STATE_CACHE.get(this.blockPos);
+        if (saved != null) {
+            this.searchFilter = saved.searchFilter;
+            this.currentPage = saved.storagePage;
+            this.catalogPage = saved.catalogPage;
+        }
         if (this.catalogAllItems.isEmpty()) {
             this.catalogAllItems = ItemCatalog.buildAllItems();
         }
         this.applyCatalogFilter();
-        this.searchBox = new EditBox(this.font, this.leftPos + 8, this.topPos + 20, 300, 14, Component.literal("Search"));
+        this.searchBox = new EditBox(this.font, this.leftPos + 8, this.topPos + 156, 110, 14, Component.literal("Search"));
         this.searchBox.setMaxLength(50);
         this.searchBox.setResponder(this::onSearchChanged);
         this.searchBox.setValue(this.searchFilter);
         this.addRenderableWidget(this.searchBox);
-        this.clearSearchButton = Button.builder(Component.literal("X"), button -> this.clearSearch()).bounds(this.leftPos + 312, this.topPos + 19, 16, 16).build();
+        this.clearSearchButton = Button.builder(Component.literal("X"), button -> this.clearSearch()).bounds(this.leftPos + 122, this.topPos + 155, 16, 16).build();
         this.addRenderableWidget(this.clearSearchButton);
-        this.prevPageButton = Button.builder(Component.literal("<"), button -> this.previousPage()).bounds(this.leftPos + 100, this.topPos + 156, 20, 12).build();
-        this.addRenderableWidget(this.prevPageButton);
-        this.nextPageButton = Button.builder(Component.literal(">"), button -> this.nextPage()).bounds(this.leftPos + 164, this.topPos + 156, 20, 12).build();
-        this.addRenderableWidget(this.nextPageButton);
-        this.catalogPrevPageButton = Button.builder(Component.literal("<"), button -> this.catalogPreviousPage()).bounds(this.leftPos + 184, this.topPos + 156, 20, 12).build();
-        this.addRenderableWidget(this.catalogPrevPageButton);
-        this.catalogNextPageButton = Button.builder(Component.literal(">"), button -> this.catalogNextPage()).bounds(this.leftPos + 356, this.topPos + 156, 20, 12).build();
-        this.addRenderableWidget(this.catalogNextPageButton);
+        this.recipeView.createControls(this.font, this.leftPos + 184, this.topPos + 156);
+        if (saved != null) {
+            if (!saved.lastTargetItemId.isEmpty()) {
+                Item restoredItem = BuiltInRegistries.ITEM.get(ResourceLocation.tryParse(saved.lastTargetItemId));
+                if (restoredItem != null && restoredItem != Items.AIR) {
+                    this.recipeView.setTarget(new ItemStack(restoredItem));
+                }
+            }
+            this.recipeView.setSynthesisCount(saved.synthesisCount);
+        }
+        this.recipeView.getSynthesisCountField().setResponder(text -> this.saveState());
+        this.addRenderableWidget(this.recipeView.getTrySynthesisButton());
+        this.addRenderableWidget(this.recipeView.getSynthesisCountField());
         this.updatePageButtons();
         if (this.minecraft != null) {
             this.minecraft.execute(() -> this.requestStorageData());
@@ -166,12 +184,15 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         this.renderItemCounts(graphics, mouseX, mouseY);
         this.renderTooltips(graphics, mouseX, mouseY);
         this.renderCatalogTooltips(graphics, mouseX, mouseY);
+        this.recipeView.render(graphics, this.font, this.leftPos + 184, this.topPos + 156, mouseX, mouseY);
     }
 
     protected void renderBg(GuiGraphics graphics, float partialTick, int mouseX, int mouseY) {
-        graphics.fill(this.leftPos, this.topPos, this.leftPos + 408, this.topPos + 272, -7631989);
-        this.drawBorder(graphics, this.leftPos, this.topPos, 408, 272, -13158601);
-        graphics.fill(this.leftPos + 176, this.topPos + 6, this.leftPos + 177, this.topPos + 272, -13750738);
+        graphics.fill(this.leftPos, this.topPos, this.leftPos + 354, this.topPos + 264, -7631989);
+        this.drawBorder(graphics, this.leftPos, this.topPos, 354, 264, -13158601);
+        // 右下角合成面板:独立子区域,亮色底 + 边框,四周留出可见边距(不贴到主界面边缘)
+        graphics.fill(this.leftPos + 184, this.topPos + 156, this.leftPos + 342, this.topPos + 256, -6710887);
+        this.drawBorder(graphics, this.leftPos + 184, this.topPos + 156, 158, 100, -13158601);
         graphics.drawString(this.font, this.title, this.leftPos + 8, this.topPos + 6, 0x404040, false);
         this.renderStorageGrid(graphics, mouseX, mouseY);
         this.renderCatalogGrid(graphics, mouseX, mouseY);
@@ -199,17 +220,17 @@ extends AbstractContainerScreen<CustomStorageContainer> {
     }
 
     private void renderCatalogGrid(GuiGraphics graphics, int mouseX, int mouseY) {
-        int startIndex = this.catalogPage * 72;
-        int endIndex = Math.min(startIndex + 72, this.catalogFilteredItems.size());
+        int startIndex = this.catalogPage * 54;
+        int endIndex = Math.min(startIndex + 54, this.catalogFilteredItems.size());
         for (int i = startIndex; i < endIndex; ++i) {
             int gridIndex = i - startIndex;
-            int x = this.leftPos + 184 + gridIndex % 12 * 18;
-            int y = this.topPos + 40 + gridIndex / 12 * 18;
+            int x = this.leftPos + 184 + gridIndex % 9 * 18;
+            int y = this.topPos + 40 + gridIndex / 9 * 18;
             this.renderCatalogSlot(graphics, x, y, this.catalogFilteredItems.get(i), mouseX, mouseY);
         }
-        for (int i = endIndex - startIndex; i < 72; ++i) {
-            int x = this.leftPos + 184 + i % 12 * 18;
-            int y = this.topPos + 40 + i / 12 * 18;
+        for (int i = endIndex - startIndex; i < 54; ++i) {
+            int x = this.leftPos + 184 + i % 9 * 18;
+            int y = this.topPos + 40 + i / 9 * 18;
             this.renderCatalogEmptySlot(graphics, x, y);
         }
     }
@@ -281,22 +302,27 @@ extends AbstractContainerScreen<CustomStorageContainer> {
     }
 
     private void renderStatistics(GuiGraphics graphics) {
-        String stats = String.format("Types: %d | Items: %s", this.totalTypes, this.formatCount(this.totalItems));
-        graphics.drawString(this.font, stats, this.leftPos + 8, this.topPos + 260, 0x404040, false);
+        Component stats = Component.translatable("gui.storageandoneclicksynthesis.stats", this.totalTypes, this.formatCount(this.totalItems));
+        int x = this.leftPos + 8 + this.font.width(this.title) + 8;
+        graphics.drawString(this.font, stats, x, this.topPos + 6, 0x404040, false);
     }
 
     private void renderStoragePageInfo(GuiGraphics graphics) {
-        String pageInfo = String.format("%d / %d", this.currentPage + 1, this.maxPage + 1);
-        int pageInfoWidth = this.font.width(pageInfo);
-        int centerX = this.leftPos + 142 - pageInfoWidth / 2;
-        graphics.drawString(this.font, pageInfo, centerX, this.topPos + 158, 0x404040, false);
+        String pageInfo = String.format("%d/%d", this.currentPage + 1, this.maxPage + 1);
+        graphics.pose().pushPose();
+        graphics.pose().scale(0.5f, 0.5f, 1.0f);
+        int centerX = (this.leftPos + 89) * 2 - this.font.width(pageInfo) / 2;
+        graphics.drawString(this.font, pageInfo, centerX, (this.topPos + 34) * 2, 0x404040, false);
+        graphics.pose().popPose();
     }
 
     private void renderCatalogPageInfo(GuiGraphics graphics) {
-        String pageInfo = String.format("%d / %d", this.catalogPage + 1, this.catalogMaxPage + 1);
-        int pageInfoWidth = this.font.width(pageInfo);
-        int centerX = this.leftPos + 292 - pageInfoWidth / 2;
-        graphics.drawString(this.font, pageInfo, centerX, this.topPos + 158, 0x404040, false);
+        String pageInfo = String.format("%d/%d", this.catalogPage + 1, this.catalogMaxPage + 1);
+        graphics.pose().pushPose();
+        graphics.pose().scale(0.5f, 0.5f, 1.0f);
+        int centerX = (this.leftPos + 265) * 2 - this.font.width(pageInfo) / 2;
+        graphics.drawString(this.font, pageInfo, centerX, (this.topPos + 34) * 2, 0x404040, false);
+        graphics.pose().popPose();
     }
 
     private void renderItemCounts(GuiGraphics graphics, int mouseX, int mouseY) {
@@ -363,6 +389,16 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         }
     }
 
+    @Override
+    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        boolean textFocused = this.searchBox != null && this.searchBox.isFocused()
+                || this.recipeView.getSynthesisCountField() != null && this.recipeView.getSynthesisCountField().isFocused();
+        if (textFocused && this.minecraft != null && this.minecraft.options.keyInventory.matches(keyCode, scanCode)) {
+            return true;
+        }
+        return super.keyPressed(keyCode, scanCode, modifiers);
+    }
+
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
         if (this.searchBox.isMouseOver(mouseX, mouseY)) {
             return super.mouseClicked(mouseX, mouseY, button);
@@ -370,7 +406,8 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         int catalogIndex = this.getCatalogSlotAt((int)mouseX, (int)mouseY);
         if (catalogIndex >= 0) {
             if (button == 0) {
-                this.viewRecipes(this.catalogFilteredItems.get(catalogIndex));
+                this.recipeView.setTarget(this.catalogFilteredItems.get(catalogIndex));
+                this.saveState();
             }
             return true;
         }
@@ -477,10 +514,12 @@ extends AbstractContainerScreen<CustomStorageContainer> {
             this.searchFilter = searchTerm;
             this.currentPage = 0;
             this.catalogPage = 0;
+            this.cachedFilteredStorage = null;
             this.applyStorageFilter();
             this.applyCatalogFilter();
             this.updatePageButtons();
             this.lastClientUpdateTime = System.currentTimeMillis();
+            this.saveState();
         }
     }
 
@@ -493,6 +532,7 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         if (this.currentPage > 0) {
             --this.currentPage;
             this.updatePageButtons();
+            this.saveState();
         }
     }
 
@@ -500,6 +540,7 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         if (this.currentPage < this.maxPage) {
             ++this.currentPage;
             this.updatePageButtons();
+            this.saveState();
         }
     }
 
@@ -507,6 +548,7 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         if (this.catalogPage > 0) {
             --this.catalogPage;
             this.updatePageButtons();
+            this.saveState();
         }
     }
 
@@ -514,22 +556,42 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         if (this.catalogPage < this.catalogMaxPage) {
             ++this.catalogPage;
             this.updatePageButtons();
+            this.saveState();
         }
     }
 
+    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (this.recipeView.mouseScrolled(mouseX, mouseY, scrollY)) {
+            return true;
+        }
+        if (this.isInStorageGrid(mouseX, mouseY)) {
+            if (scrollY < 0.0) {
+                this.nextPage();
+            } else if (scrollY > 0.0) {
+                this.previousPage();
+            }
+            return true;
+        }
+        if (this.isInCatalogGrid(mouseX, mouseY)) {
+            if (scrollY < 0.0) {
+                this.catalogNextPage();
+            } else if (scrollY > 0.0) {
+                this.catalogPreviousPage();
+            }
+            return true;
+        }
+        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+    }
+
+    private boolean isInStorageGrid(double mouseX, double mouseY) {
+        return mouseX >= (double)(this.leftPos + 8) && mouseX < (double)(this.leftPos + 8 + 9 * 18) && mouseY >= (double)(this.topPos + 40) && mouseY < (double)(this.topPos + 40 + 6 * 18);
+    }
+
+    private boolean isInCatalogGrid(double mouseX, double mouseY) {
+        return mouseX >= (double)(this.leftPos + 184) && mouseX < (double)(this.leftPos + 184 + 9 * 18) && mouseY >= (double)(this.topPos + 40) && mouseY < (double)(this.topPos + 40 + 6 * 18);
+    }
+
     private void updatePageButtons() {
-        if (this.prevPageButton != null) {
-            this.prevPageButton.active = this.currentPage > 0;
-        }
-        if (this.nextPageButton != null) {
-            this.nextPageButton.active = this.currentPage < this.maxPage;
-        }
-        if (this.catalogPrevPageButton != null) {
-            this.catalogPrevPageButton.active = this.catalogPage > 0;
-        }
-        if (this.catalogNextPageButton != null) {
-            this.catalogNextPageButton.active = this.catalogPage < this.catalogMaxPage;
-        }
     }
 
     private void applyStorageFilter() {
@@ -541,17 +603,22 @@ extends AbstractContainerScreen<CustomStorageContainer> {
 
     private void applyCatalogFilter() {
         this.catalogFilteredItems.clear();
+        Set<Item> craftable = ItemCatalog.buildCraftableItems();
         for (ItemStack stack : this.catalogAllItems) {
+            if (!craftable.contains(stack.getItem())) continue;
             if (!ItemCatalog.matchesSearchFilter(stack, this.searchFilter)) continue;
             this.catalogFilteredItems.add(stack);
         }
-        this.catalogMaxPage = Math.max(0, (this.catalogFilteredItems.size() - 1) / 72);
+        this.catalogMaxPage = Math.max(0, (this.catalogFilteredItems.size() - 1) / 54);
         if (this.catalogPage > this.catalogMaxPage) {
             this.catalogPage = this.catalogMaxPage;
         }
     }
 
     private List<Map.Entry<String, Long>> getFilteredStorageEntries() {
+        if (this.cachedFilteredStorage != null) {
+            return this.cachedFilteredStorage;
+        }
         ArrayList<Map.Entry<String, Long>> result = new ArrayList<Map.Entry<String, Long>>();
         for (Map.Entry<String, Long> entry : this.storageData.entrySet()) {
             if (entry.getValue() == null || entry.getValue() <= 0L) continue;
@@ -562,6 +629,7 @@ extends AbstractContainerScreen<CustomStorageContainer> {
             }
             result.add(new AbstractMap.SimpleEntry<String, Long>(entry.getKey(), entry.getValue()));
         }
+        this.cachedFilteredStorage = result;
         return result;
     }
 
@@ -594,29 +662,14 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         if (relX >= 0 && relY >= 0) {
             int col = relX / 18;
             int row = relY / 18;
-            if (col < 12 && row < 6) {
-                int itemIndex = this.catalogPage * 72 + row * 12 + col;
+            if (col < 9 && row < 6) {
+                int itemIndex = this.catalogPage * 54 + row * 9 + col;
                 if (itemIndex < this.catalogFilteredItems.size()) {
                     return itemIndex;
                 }
             }
         }
         return -1;
-    }
-
-    private void viewRecipes(ItemStack item) {
-        if (item == null || item.isEmpty()) {
-            return;
-        }
-        if (this.minecraft != null) {
-            try {
-                JeiStyleRecipeScreen recipeScreen = new JeiStyleRecipeScreen(item, this.blockPos, this);
-                this.minecraft.setScreen(recipeScreen);
-            }
-            catch (Exception e) {
-                LOGGER.error("Failed to open recipe screen for item: {}", item.getDisplayName().getString(), e);
-            }
-        }
     }
 
     private ItemStack getCachedItemStack(String key) {
@@ -673,11 +726,7 @@ extends AbstractContainerScreen<CustomStorageContainer> {
 
     public void updateStorageData(StorageNetworkHandler.StorageDataPacket packet) {
         this.storageData = packet.getItems();
-        if (this.isInitialLoad) {
-            this.searchFilter = packet.getSearchFilter();
-        } else if (this.searchBox != null) {
-            this.searchFilter = this.searchBox.getValue();
-        }
+        this.cachedFilteredStorage = null;
         this.totalItems = packet.getTotalItems();
         this.totalTypes = packet.getTotalTypes();
         Map<String, CompoundTag> cachedData = packet.getCachedItemData();
@@ -694,10 +743,6 @@ extends AbstractContainerScreen<CustomStorageContainer> {
             }
         }
         this.applyStorageFilter();
-        if (this.searchBox != null && this.isInitialLoad) {
-            this.searchBox.setValue(this.searchFilter);
-            this.isInitialLoad = false;
-        }
         this.updatePageButtons();
     }
 
@@ -717,6 +762,13 @@ extends AbstractContainerScreen<CustomStorageContainer> {
     public void handleDropResponse(boolean success) {
     }
 
+    /** 服务端发来的合成结果:让右下角配方栏直接显示缺失材料/错误/成功。 */
+    public void handleSynthesisResult(SynthesisResultPacket packet) {
+        if (packet != null) {
+            this.recipeView.showResult(packet.success(), packet.message(), packet.missing());
+        }
+    }
+
     public static boolean handleQuickMoveToStorage(ItemStack itemStack, int slotId) {
         if (currentInstance != null && !itemStack.isEmpty()) {
             String itemKey = CustomStorageData.getItemKey(itemStack);
@@ -733,10 +785,31 @@ extends AbstractContainerScreen<CustomStorageContainer> {
     }
 
     public void onClose() {
+        this.saveState();
         if (this.blockPos != null) {
             this.sendItemOperation(StorageNetworkHandler.OperationType.CLOSE, "", 0L);
         }
         super.onClose();
         currentInstance = null;
+    }
+
+    private void saveState() {
+        if (this.blockPos == null) {
+            return;
+        }
+        StoredState state = STATE_CACHE.computeIfAbsent(this.blockPos, k -> new StoredState());
+        state.searchFilter = this.searchFilter;
+        state.storagePage = this.currentPage;
+        state.catalogPage = this.catalogPage;
+        state.synthesisCount = this.recipeView.getSynthesisCount();
+        state.lastTargetItemId = this.recipeView.getTargetItemId();
+    }
+
+    private static final class StoredState {
+        String searchFilter = "";
+        int storagePage = 0;
+        int catalogPage = 0;
+        String synthesisCount = "1";
+        String lastTargetItemId = "";
     }
 }

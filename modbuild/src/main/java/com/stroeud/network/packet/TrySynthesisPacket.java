@@ -29,6 +29,7 @@ package com.stroeud.network.packet;
 
 import com.mojang.logging.LogUtils;
 import com.stroeud.block.CustomStorageBlock;
+import com.stroeud.network.NetworkManager;
 import com.stroeud.server.recipe.CraftingStep;
 import com.stroeud.server.recipe.RecipeResolutionResult;
 import com.stroeud.server.recipe.RecipeResolver;
@@ -119,11 +120,11 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
                     storageData.setRegistryAccess((HolderLookup.Provider)serverPlayer.serverLevel().registryAccess());
                     RecipeResolver recipeResolver = new RecipeResolver((Level)serverPlayer.serverLevel());
                     HashMap<Item, Integer> availableItems = new HashMap<Item, Integer>();
-                    LOGGER.info("\u5b58\u50a8\u5bb9\u5668\u4e2d\u7684\u6240\u6709\u7269\u54c1:");
+                    LOGGER.debug("\u5b58\u50a8\u5bb9\u5668\u4e2d\u7684\u6240\u6709\u7269\u54c1:");
                     for (Map.Entry<String, Long> entry : storageData.getAllItems().entrySet()) {
                         String itemKey = entry.getKey();
                         long count = entry.getValue();
-                        LOGGER.info("  - " + itemKey + ": " + count);
+                        LOGGER.debug("  - " + itemKey + ": " + count);
                         try {
                             ResourceLocation itemId;
                             Item item;
@@ -138,89 +139,29 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
                             int currentCount = availableItems.getOrDefault(item, 0);
                             int newCount = (int)Math.min((long)currentCount + count, Integer.MAX_VALUE);
                             availableItems.put(item, newCount);
-                            LOGGER.info("    \u89e3\u6790\u4e3a: " + item.getDescriptionId() + " \u7d2f\u8ba1\u6570\u91cf: " + newCount);
+                            LOGGER.debug("    \u89e3\u6790\u4e3a: " + item.getDescriptionId() + " \u7d2f\u8ba1\u6570\u91cf: " + newCount);
                         }
                         catch (Exception e) {
                             LOGGER.error("\u89e3\u6790\u7269\u54c1\u952e\u503c\u5931\u8d25: " + itemKey, (Throwable)e);
                         }
                     }
-                    LOGGER.info("\u6700\u7ec8\u53ef\u7528\u7269\u54c1\u6620\u5c04:");
+                    LOGGER.debug("\u6700\u7ec8\u53ef\u7528\u7269\u54c1\u6620\u5c04:");
                     for (Map.Entry<Item, Integer> entry : availableItems.entrySet()) {
-                        LOGGER.info("  - " + ((Item)entry.getKey()).getDescriptionId() + ": " + String.valueOf(entry.getValue()));
+                        LOGGER.debug("  - " + ((Item)entry.getKey()).getDescriptionId() + ": " + String.valueOf(entry.getValue()));
                     }
-                    LOGGER.info("\u76ee\u6807\u7269\u54c1: " + this.targetItem.getDescriptionId() + " x" + this.synthesisCount);
+                    LOGGER.debug("\u76ee\u6807\u7269\u54c1: " + this.targetItem.getDescriptionId() + " x" + this.synthesisCount);
                     HashMap<Item, Integer> availableForPlanning = new HashMap<Item, Integer>(availableItems);
                     availableForPlanning.put(this.targetItem.getItem(), 0);
                     if (!recipeResolver.hasCraftingRecipe(this.targetItem.getItem())) {
                         TrySynthesisPacket.sendPlayerMessage(serverPlayer, (Component)Component.literal((String)"\u4e00\u952e\u5408\u6210\u5931\u8d25\uff1a\u8be5\u7269\u54c1\u65e0\u5de5\u4f5c\u53f0\u914d\u65b9"));
+                        this.sendSynthesisResult(serverPlayer, false, "\u8be5\u7269\u54c1\u65e0\u5de5\u4f5c\u53f0\u914d\u65b9", null);
                         return;
                     }
-                    List<Map<Item, Integer>> list = recipeResolver.computeMissingAlternativesForCraftingOnly(this.targetItem.getItem(), this.synthesisCount, availableForPlanning, 3);
-                    if (list != null && !list.isEmpty()) {
-                        TrySynthesisPacket.sendPlayerMessage(serverPlayer, TrySynthesisPacket.formatMissingAlternatives("\u4e00\u952e\u5408\u6210\u5931\u8d25\uff0c\u7f3a\u5c11\uff1a", list));
-                        return;
-                    }
-                    RecipeResolutionResult result = recipeResolver.resolveRecipeCraftingOnly(this.targetItem, this.synthesisCount, availableForPlanning);
-                    if (!result.isSuccess()) {
-                        Map<Item, Integer> missing = result.getMissingMaterials();
-                        if (missing == null || missing.isEmpty()) {
-                            missing = result.getTotalConsumption();
-                        }
-                        if (missing != null && !missing.isEmpty()) {
-                            TrySynthesisPacket.sendPlayerMessage(serverPlayer, TrySynthesisPacket.formatMissingMessage("\u4e00\u952e\u5408\u6210\u5931\u8d25\uff0c\u7f3a\u5c11\uff1a", missing));
-                            return;
-                        }
-                        String error = result.getErrorMessage();
-                        if (error != null && !error.isEmpty()) {
-                            TrySynthesisPacket.sendPlayerMessage(serverPlayer, (Component)Component.literal((String)("\u4e00\u952e\u5408\u6210\u5931\u8d25\uff1a" + error)));
-                            return;
-                        }
-                        TrySynthesisPacket.sendPlayerMessage(serverPlayer, (Component)Component.literal((String)"\u4e00\u952e\u5408\u6210\u5931\u8d25\uff1a\u8be5\u7269\u54c1\u65e0\u5de5\u4f5c\u53f0\u914d\u65b9"));
-                        return;
-                    }
-                    LOGGER.info("\u627e\u5230 " + result.getCraftingSteps().size() + " \u4e2a\u5408\u6210\u6b65\u9aa4");
-                    List<CraftingStep> steps = result.getCraftingSteps();
-                    if (!TrySynthesisPacket.validateSteps(steps)) {
-                        TrySynthesisPacket.sendPlayerMessage(serverPlayer, (Component)Component.literal((String)"\u4e00\u952e\u5408\u6210\u5931\u8d25\uff1a\u914d\u65b9\u89e3\u6790\u5f02\u5e38"));
-                        return;
-                    }
-                    CompoundTag backup = storageData.toNBT();
-                    CraftingStep lastStep = steps.get(steps.size() - 1);
-                    String outputKey = this.generateItemKey(lastStep.getOutputPrototype());
-                    long beforeOutput = storageData.getItemCount(outputKey);
-                    try {
-                        for (CraftingStep step : steps) {
-                            this.executeStep(storageData, step);
-                        }
-                    }
-                    catch (SynthesisFailure failure) {
-                        storageData.fromNBT(backup);
-                        storageManager.setDirty();
-                        if (failure.missing != null && !failure.missing.isEmpty()) {
-                            TrySynthesisPacket.sendPlayerMessage(serverPlayer, TrySynthesisPacket.formatMissingMessage("\u4e00\u952e\u5408\u6210\u5931\u8d25\uff0c\u7f3a\u5c11\uff1a", failure.missing));
-                        } else {
-                            TrySynthesisPacket.sendPlayerMessage(serverPlayer, (Component)Component.literal((String)"\u4e00\u952e\u5408\u6210\u5931\u8d25\uff1a\u7f3a\u5c11\u6750\u6599"));
-                        }
-                        storageManager.forceSync(serverPlayer);
-                        return;
-                    }
-                    long afterOutput = storageData.getItemCount(outputKey);
-                    int expectedAdded = lastStep.getOutputCount();
-                    if (expectedAdded <= 0 || afterOutput - beforeOutput < (long)expectedAdded) {
-                        storageData.fromNBT(backup);
-                        storageManager.setDirty();
-                        TrySynthesisPacket.sendPlayerMessage(serverPlayer, (Component)Component.literal((String)"\u4e00\u952e\u5408\u6210\u5931\u8d25\uff1a\u7f3a\u5c11\u6750\u6599"));
-                        storageManager.forceSync(serverPlayer);
-                        return;
-                    }
-                    storageManager.forceSync(serverPlayer);
-                    storageManager.setDirty();
-                    int producedCount = this.synthesisCount;
-                    if (!steps.isEmpty()) {
-                        producedCount = steps.get(steps.size() - 1).getOutputCount();
-                    }
-                    TrySynthesisPacket.sendPlayerMessage(serverPlayer, (Component)Component.literal((String)"\u4e00\u952e\u5408\u6210\u6210\u529f\uff1a").append(this.targetItem.getHoverName()).append((Component)Component.literal((String)(" x" + producedCount))));
-                    LOGGER.info("\u4e00\u952e\u5408\u6210\u5b8c\u6210\uff0c\u5df2\u540c\u6b65\u6570\u636e\u5230\u5ba2\u6237\u7aef\u5e76\u6807\u8bb0\u4e3a\u9700\u8981\u4fdd\u5b58");
+                    // \u540c\u6b65\u89e3\u6790(\u5e26 10 \u79d2\u8d85\u65f6\u4fdd\u62a4)\u3002\u4e0d\u4f7f\u7528\u540e\u53f0\u7ebf\u7a0b:NeoForge \u914d\u65b9/\u6ce8\u518c\u8868\u4ece\u975e\u4e3b\u7ebf\u7a0b\u8bfb\u53d6\u53ef\u80fd\u4e0d\u53ef\u9760,
+                    // \u5bfc\u81f4\u89e3\u6790\u62ff\u4e0d\u5230\u914d\u65b9\u800c\u8bef\u62a5\u5931\u8d25\u3002\u9632\u5361\u6b7b\u5df2\u7531\u5019\u9009\u4e0a\u9650/\u6df1\u5ea6/\u77ed\u8def\u4fdd\u8bc1\u3002
+                    recipeResolver.setDeadline(System.currentTimeMillis() + 10000L);
+                    ResolutionOutcome outcome = TrySynthesisPacket.resolveOutcome(recipeResolver, this.targetItem.copy(), this.synthesisCount, availableForPlanning);
+                    this.applyOutcome(serverPlayer, storageManager, storageData, outcome, recipeResolver);
                 }
                 catch (Exception e) {
                     LOGGER.error("\u5904\u7406\u5408\u6210\u8bf7\u6c42\u65f6\u53d1\u751f\u9519\u8bef: " + e.getMessage(), (Throwable)e);
@@ -229,14 +170,144 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
         });
     }
 
+    private static ResolutionOutcome resolveOutcome(RecipeResolver resolver, ItemStack targetStack, int count, Map<Item, Integer> availableForPlanning) {
+        try {
+            List<Map<Item, Integer>> missing = resolver.computeMissingAlternativesForCraftingOnly(targetStack.getItem(), count, availableForPlanning, 3);
+            if (resolver.isTimedOut()) {
+                return new ResolutionOutcome(null, RecipeResolutionResult.failure("合成解析超时"));
+            }
+            if (missing != null && !missing.isEmpty()) {
+                return new ResolutionOutcome(missing, null);
+            }
+            RecipeResolutionResult result = resolver.resolveRecipeCraftingOnly(targetStack, count, availableForPlanning);
+            if (resolver.isTimedOut()) {
+                return new ResolutionOutcome(null, RecipeResolutionResult.failure("合成解析超时"));
+            }
+            return new ResolutionOutcome(null, result);
+        }
+        catch (Exception e) {
+            LOGGER.error("合成解析异常: " + e.getMessage(), e);
+            return new ResolutionOutcome(null, RecipeResolutionResult.failure("合成解析异常"));
+        }
+    }
+
+    private void applyOutcome(ServerPlayer serverPlayer, CustomStorageManager storageManager, CustomStorageData storageData, ResolutionOutcome outcome, RecipeResolver recipeResolver) {
+        try {
+            if (outcome == null) {
+                return;
+            }
+            if (recipeResolver.isTimedOut() || (outcome.result != null && outcome.result.getErrorMessage() != null && outcome.result.getErrorMessage().contains("超时"))) {
+                TrySynthesisPacket.sendPlayerMessage(serverPlayer, Component.literal("一键合成超时：配方解析过于复杂，请减少目标数量或重试"));
+                this.sendSynthesisResult(serverPlayer, false, "合成解析超时", null);
+                return;
+            }
+            if (outcome.missing != null && !outcome.missing.isEmpty()) {
+                TrySynthesisPacket.sendPlayerMessage(serverPlayer, TrySynthesisPacket.formatMissingAlternatives("一键合成失败，缺少：", outcome.missing));
+                Map<Item, Integer> firstMissing = outcome.missing.get(0);
+                this.sendSynthesisResult(serverPlayer, false, "缺少材料", firstMissing);
+                return;
+            }
+            RecipeResolutionResult result = outcome.result;
+            if (result == null || !result.isSuccess()) {
+                Map<Item, Integer> missing = result == null ? null : result.getMissingMaterials();
+                if (missing == null || missing.isEmpty()) {
+                    missing = result == null ? null : result.getTotalConsumption();
+                }
+                if (missing != null && !missing.isEmpty()) {
+                    TrySynthesisPacket.sendPlayerMessage(serverPlayer, TrySynthesisPacket.formatMissingMessage("一键合成失败，缺少：", missing));
+                    this.sendSynthesisResult(serverPlayer, false, "缺少材料", missing);
+                    return;
+                }
+                String error = result == null ? null : result.getErrorMessage();
+                if (error != null && !error.isEmpty()) {
+                    TrySynthesisPacket.sendPlayerMessage(serverPlayer, Component.literal("一键合成失败：" + error));
+                    this.sendSynthesisResult(serverPlayer, false, error, null);
+                    return;
+                }
+                TrySynthesisPacket.sendPlayerMessage(serverPlayer, Component.literal("一键合成失败：该物品无工作台配方"));
+                this.sendSynthesisResult(serverPlayer, false, "该物品无工作台配方", null);
+                return;
+            }
+            List<CraftingStep> steps = result.getCraftingSteps();
+            if (!TrySynthesisPacket.validateSteps(steps)) {
+                TrySynthesisPacket.sendPlayerMessage(serverPlayer, Component.literal("一键合成失败：配方解析异常"));
+                this.sendSynthesisResult(serverPlayer, false, "配方解析异常", null);
+                return;
+            }
+            CompoundTag backup = storageData.toNBT();
+            CraftingStep lastStep = steps.get(steps.size() - 1);
+            String outputKey = this.generateItemKey(lastStep.getOutputPrototype());
+            long beforeOutput = storageData.getItemCount(outputKey);
+            try {
+                for (CraftingStep step : steps) {
+                    this.executeStep(storageData, step);
+                }
+            }
+            catch (SynthesisFailure failure) {
+                storageData.fromNBT(backup);
+                storageManager.setDirty();
+                if (failure.missing != null && !failure.missing.isEmpty()) {
+                    TrySynthesisPacket.sendPlayerMessage(serverPlayer, TrySynthesisPacket.formatMissingMessage("一键合成失败，缺少：", failure.missing));
+                    this.sendSynthesisResult(serverPlayer, false, "缺少材料", failure.missing);
+                } else {
+                    TrySynthesisPacket.sendPlayerMessage(serverPlayer, Component.literal("一键合成失败：缺少材料"));
+                    this.sendSynthesisResult(serverPlayer, false, "缺少材料", null);
+                }
+                storageManager.forceSync(serverPlayer);
+                return;
+            }
+            long afterOutput = storageData.getItemCount(outputKey);
+            int expectedAdded = lastStep.getOutputCount();
+            if (expectedAdded <= 0 || afterOutput - beforeOutput < (long)expectedAdded) {
+                storageData.fromNBT(backup);
+                storageManager.setDirty();
+                TrySynthesisPacket.sendPlayerMessage(serverPlayer, Component.literal("一键合成失败：缺少材料"));
+                this.sendSynthesisResult(serverPlayer, false, "缺少材料", null);
+                storageManager.forceSync(serverPlayer);
+                return;
+            }
+            storageManager.forceSync(serverPlayer);
+            storageManager.setDirty();
+            int producedCount = steps.get(steps.size() - 1).getOutputCount();
+            TrySynthesisPacket.sendPlayerMessage(serverPlayer, Component.literal("一键合成成功：").append(this.targetItem.getHoverName()).append(Component.literal(" x" + producedCount)));
+            this.sendSynthesisResult(serverPlayer, true, "合成成功", null);
+            LOGGER.debug("一键合成完成，已同步数据到客户端并标记为需要保存");
+        }
+        catch (Exception e) {
+            LOGGER.error("处理合成结果时发生错误: " + e.getMessage(), e);
+        }
+    }
+
+    private static final class ResolutionOutcome {
+        private final List<Map<Item, Integer>> missing;
+        private final RecipeResolutionResult result;
+
+        private ResolutionOutcome(List<Map<Item, Integer>> missing, RecipeResolutionResult result) {
+            this.missing = missing;
+            this.result = result;
+        }
+    }
+
+    /** 把合成结果发到客户端,让 GUI 在配方栏内直接显示缺失材料/错误,无需关界面看聊天栏。 */
+    private void sendSynthesisResult(ServerPlayer player, boolean success, String message, Map<Item, Integer> missingItems) {
+        HashMap<String, Long> missing = new HashMap<String, Long>();
+        if (missingItems != null) {
+            for (Map.Entry<Item, Integer> e : missingItems.entrySet()) {
+                if (e.getKey() == null) continue;
+                missing.put(BuiltInRegistries.ITEM.getKey(e.getKey()).toString(), (long)(e.getValue() == null ? 0 : e.getValue().intValue()));
+            }
+        }
+        NetworkManager.sendToPlayer(player, new SynthesisResultPacket(success, message == null ? "" : message, missing));
+    }
+
     private void executeStep(CustomStorageData storageData, CraftingStep step) {
         try {
             List<String> keys;
             int requiredCount;
             Item material;
-            LOGGER.info("\u6267\u884c\u5408\u6210\u6b65\u9aa4: " + step.getOutputItem().getDescriptionId() + " x" + step.getOutputCount());
+            LOGGER.debug("\u6267\u884c\u5408\u6210\u6b65\u9aa4: " + step.getOutputItem().getDescriptionId() + " x" + step.getOutputCount());
             Map<Item, Integer> req0 = step.getRequiredMaterials();
-            LOGGER.info("\u9700\u8981\u7684\u6750\u6599\u6570\u91cf: " + (req0 == null ? 0 : req0.size()));
+            LOGGER.debug("\u9700\u8981\u7684\u6750\u6599\u6570\u91cf: " + (req0 == null ? 0 : req0.size()));
             if (req0 == null || req0.isEmpty()) {
                 throw new SynthesisFailure(null);
             }
@@ -274,7 +345,7 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
             int outputCount = step.getOutputCount();
             ItemStack outputPrototype = step.getOutputPrototype();
             this.addOutputToStorage(storageData, outputPrototype, outputCount);
-            LOGGER.info("\u751f\u6210\u7269\u54c1: " + step.getOutputItem().getDescriptionId() + " x" + outputCount);
+            LOGGER.debug("\u751f\u6210\u7269\u54c1: " + step.getOutputItem().getDescriptionId() + " x" + outputCount);
         }
         catch (SynthesisFailure failure) {
             throw failure;

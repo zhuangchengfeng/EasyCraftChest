@@ -16,6 +16,7 @@
 package com.stroeud.network;
 
 import com.stroeud.network.StorageNetworkHandler;
+import com.stroeud.network.packet.SynthesisResultPacket;
 import com.stroeud.network.packet.TrySynthesisPacket;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -39,6 +40,7 @@ public class NetworkManager {
         registrar.playToClient(StorageNetworkHandler.OperationResultPacket.TYPE, StorageNetworkHandler.OperationResultPacket.STREAM_CODEC, StorageNetworkHandler.OperationResultPacket::handle);
         registrar.playToServer(StorageNetworkHandler.OpenStoragePacket.TYPE, StorageNetworkHandler.OpenStoragePacket.STREAM_CODEC, StorageNetworkHandler.OpenStoragePacket::handle);
         registrar.playToServer(TrySynthesisPacket.TYPE, TrySynthesisPacket.STREAM_CODEC, TrySynthesisPacket::handle);
+        registrar.playToClient(SynthesisResultPacket.TYPE, SynthesisResultPacket.STREAM_CODEC, SynthesisResultPacket::handle);
     }
 
     public static void sendToServer(CustomPacketPayload payload) {

@@ -7,6 +7,9 @@
   "gui.storageandoneclicksynthesis.view_recipe": "View Recipe",
   "gui.storageandoneclicksynthesis.search": "Search...",
   "gui.customstorage.recipe_view": "Recipe View",
+  "gui.storageandoneclicksynthesis.stats": "Types: %s | Items: %s",
+  "gui.storageandoneclicksynthesis.show_all": "All",
+  "gui.storageandoneclicksynthesis.show_craftable": "Craftable",
 
   "storageandoneclicksynthesis.configuration.title": "Custom Storage Configs",
   "storageandoneclicksynthesis.configuration.section.storageandoneclicksynthesis.common.toml": "Custom Storage Configs",

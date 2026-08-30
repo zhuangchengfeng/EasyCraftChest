@@ -8,6 +8,9 @@
   "gui.storageandoneclicksynthesis.search": "搜索...",
   "gui.storageandoneclicksynthesis.no_item_selected": "请先选择一个物品",
   "gui.customstorage.recipe_view": "配方查看",
+  "gui.storageandoneclicksynthesis.stats": "种类: %s | 数量: %s",
+  "gui.storageandoneclicksynthesis.show_all": "全部",
+  "gui.storageandoneclicksynthesis.show_craftable": "可合成",
 
   "storageandoneclicksynthesis.configuration.title": "自定义存储配置",
   "storageandoneclicksynthesis.configuration.section.storageandoneclicksynthesis.common.toml": "自定义存储配置",

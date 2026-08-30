@@ -18,8 +18,12 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.flag.FeatureFlagSet;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.CreativeModeTabs;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.item.crafting.RecipeHolder;
+import net.minecraft.world.item.crafting.RecipeManager;
+import net.minecraft.world.item.crafting.RecipeType;
 
 /**
  * 客户端静态工具:构建"全部物品"目录列表,并提供名称/拼音搜索过滤。
@@ -29,8 +33,19 @@ public final class ItemCatalog {
     private ItemCatalog() {
     }
 
-    /** 扫描创造物品栏 CATEGORY 页 + ITEM/BLOCK 注册表,去重、过滤,按显示名排序。 */
+    /** 全物品目录静态缓存:整个游戏会话只构建一次,之后直接复用,避免每次打开存储界面都重扫创造物品栏。 */
+    private static List<ItemStack> cachedAllItems = null;
+
+    /** 扫描创造物品栏 CATEGORY 页 + ITEM/BLOCK 注册表,去重、过滤,按显示名排序。首次调用构建并缓存,之后返回缓存。 */
     public static List<ItemStack> buildAllItems() {
+        if (cachedAllItems != null) {
+            return cachedAllItems;
+        }
+        cachedAllItems = ItemCatalog.buildAllItemsInternal();
+        return cachedAllItems;
+    }
+
+    private static List<ItemStack> buildAllItemsInternal() {
         ArrayList<ItemStack> allItems = new ArrayList<ItemStack>();
         HashSet<Object> itemUidSet = new HashSet<Object>();
         Minecraft minecraft = Minecraft.getInstance();
@@ -81,6 +96,36 @@ public final class ItemCatalog {
                 allItems.add(stack);
             }
         });
+    }
+
+    /** "有配方的物品"集合静态缓存:遍历全部配方收集产物,整个会话只算一次。 */
+    private static Set<Item> cachedCraftableItems = null;
+
+    /** 返回有配方(工作台/熔炉/切石/锻造等)的物品集合。只遍历配方取产物,O(配方数),毫秒级,之后查集合 O(1)。 */
+    public static Set<Item> buildCraftableItems() {
+        if (cachedCraftableItems != null) {
+            return cachedCraftableItems;
+        }
+        HashSet<Item> craftable = new HashSet<Item>();
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.level != null) {
+            RecipeManager recipeManager = minecraft.level.getRecipeManager();
+            HolderLookup.Provider registry = minecraft.level.registryAccess();
+            ItemCatalog.addRecipeResults(recipeManager.getAllRecipesFor(RecipeType.CRAFTING), craftable, registry);
+        }
+        cachedCraftableItems = craftable;
+        return craftable;
+    }
+
+    private static void addRecipeResults(List<? extends RecipeHolder<?>> holders, Set<Item> craftable, HolderLookup.Provider registry) {
+        for (RecipeHolder<?> holder : holders) {
+            try {
+                craftable.add(holder.value().getResultItem(registry).getItem());
+            }
+            catch (Exception e) {
+                // skip recipes that cannot be resolved
+            }
+        }
     }
 
     private static String getItemUid(ItemStack stack) {

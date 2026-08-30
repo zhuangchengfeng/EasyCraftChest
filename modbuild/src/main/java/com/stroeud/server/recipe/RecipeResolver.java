@@ -63,6 +63,10 @@ import org.slf4j.Logger;
 
 public class RecipeResolver {
     private static final Logger LOGGER = LogUtils.getLogger();
+    /** 每个原料标签最多尝试的候选数量上限,防止大标签(如 #logs)在回溯时指数爆炸导致服务端卡死。 */
+    private static final int MAX_INGREDIENT_CANDIDATES = 12;
+    private volatile boolean timedOut = false;
+    private long deadlineMs = Long.MAX_VALUE;
     private final Level level;
     private final RecipeManager recipeManager;
     private final RegistryAccess registryAccess;
@@ -73,6 +77,23 @@ public class RecipeResolver {
         this.level = level;
         this.recipeManager = level.getRecipeManager();
         this.registryAccess = level.registryAccess();
+    }
+
+    /** 设置解析截止时间(毫秒时间戳)。超过后热点循环会放弃并标记超时。 */
+    public void setDeadline(long deadlineMs) {
+        this.deadlineMs = deadlineMs;
+    }
+
+    public boolean isTimedOut() {
+        return this.timedOut;
+    }
+
+    private boolean checkTimeout() {
+        if (System.currentTimeMillis() > this.deadlineMs) {
+            this.timedOut = true;
+            return true;
+        }
+        return false;
     }
 
     public boolean hasCraftingRecipe(Item item) {
@@ -133,8 +154,13 @@ public class RecipeResolver {
         }
         HashMap<Item, Integer> workingAvailable = new HashMap<Item, Integer>(availableItems == null ? Collections.emptyMap() : availableItems);
         MissingInfo missing = this.computeMissingRecursiveCraftingOnlyWithDepth(targetItem, requiredCount, workingAvailable, new HashSet<Item>(), 0, maxDepthLimit);
-        if (missing == null || missing.missing.isEmpty()) {
-            return new MissingInfo(Collections.emptyMap(), missing == null ? 0 : missing.maxDepth);
+        if (missing == null) {
+            HashMap<Item, Integer> conservative = new HashMap<Item, Integer>();
+            conservative.put(targetItem, requiredCount);
+            return new MissingInfo(conservative, 0);
+        }
+        if (missing.missing.isEmpty()) {
+            return new MissingInfo(Collections.emptyMap(), missing.maxDepth);
         }
         HashMap<Item, Integer> cleaned = new HashMap<Item, Integer>();
         for (Map.Entry<Item, Integer> e : missing.missing.entrySet()) {
@@ -155,8 +181,11 @@ public class RecipeResolver {
 
     private RecipeResolutionResult resolveRecipeRecursiveCraftingOnly(Item targetItem, int requiredCount, Map<Item, Integer> availableItems, Set<Item> visitedItems, int depth) {
         List<CraftingRecipe> recipes;
-        if (depth > 10) {
+        if (depth > 8) {
             return RecipeResolutionResult.failure("\u9012\u5f52\u6df1\u5ea6\u8fc7\u6df1");
+        }
+        if (this.checkTimeout()) {
+            return RecipeResolutionResult.failure("\u5408\u6210\u89e3\u6790\u8d85\u65f6");
         }
         if (visitedItems.contains(targetItem)) {
             return RecipeResolutionResult.failure("\u5b58\u5728\u5faa\u73af\u4f9d\u8d56");
@@ -250,25 +279,25 @@ public class RecipeResolver {
     }
 
     private RecipeResolutionResult resolveRecipeRecursive(Item targetItem, int requiredCount, Map<Item, Integer> availableItems, Set<Item> visitedItems, int depth) {
-        LOGGER.info("\u5f00\u59cb\u89e3\u6790\u7269\u54c1: {} x{}, \u6df1\u5ea6: {}, visitedItems: {}", new Object[]{targetItem.getDescriptionId(), requiredCount, depth, visitedItems.stream().map(Item::getDescriptionId).toList()});
-        if (depth > 10) {
-            LOGGER.info("\u9012\u5f52\u6df1\u5ea6\u8fc7\u6df1 ({}), \u7ec8\u6b62\u89e3\u6790: {}", (Object)depth, (Object)targetItem.getDescriptionId());
+        LOGGER.debug("\u5f00\u59cb\u89e3\u6790\u7269\u54c1: {} x{}, \u6df1\u5ea6: {}, visitedItems: {}", new Object[]{targetItem.getDescriptionId(), requiredCount, depth, visitedItems.stream().map(Item::getDescriptionId).toList()});
+        if (depth > 8) {
+            LOGGER.debug("\u9012\u5f52\u6df1\u5ea6\u8fc7\u6df1 ({}), \u7ec8\u6b62\u89e3\u6790: {}", (Object)depth, (Object)targetItem.getDescriptionId());
             return RecipeResolutionResult.failure("\u9012\u5f52\u6df1\u5ea6\u8fc7\u6df1");
         }
         if (visitedItems.contains(targetItem)) {
-            LOGGER.info("\u68c0\u6d4b\u5230\u5faa\u73af\u4f9d\u8d56: {} \u5df2\u5728visitedItems\u4e2d: {}", (Object)targetItem.getDescriptionId(), visitedItems.stream().map(Item::getDescriptionId).toList());
+            LOGGER.debug("\u68c0\u6d4b\u5230\u5faa\u73af\u4f9d\u8d56: {} \u5df2\u5728visitedItems\u4e2d: {}", (Object)targetItem.getDescriptionId(), visitedItems.stream().map(Item::getDescriptionId).toList());
             return RecipeResolutionResult.failure("\u5b58\u5728\u5faa\u73af\u4f9d\u8d56");
         }
         if (depth > 0) {
             int availableCount = availableItems.getOrDefault(targetItem, 0);
             if (availableCount >= requiredCount) {
-                LOGGER.info("\u5b58\u50a8\u5bb9\u5668\u4e2d\u5df2\u6709\u8db3\u591f\u7684 " + targetItem.getDescriptionId() + " (\u9700\u8981: " + requiredCount + ", \u53ef\u7528: " + availableCount + ")");
+                LOGGER.debug("\u5b58\u50a8\u5bb9\u5668\u4e2d\u5df2\u6709\u8db3\u591f\u7684 " + targetItem.getDescriptionId() + " (\u9700\u8981: " + requiredCount + ", \u53ef\u7528: " + availableCount + ")");
                 HashMap<Item, Integer> consumption = new HashMap<Item, Integer>();
                 consumption.put(targetItem, requiredCount);
                 return RecipeResolutionResult.success(Collections.emptyList(), consumption);
             }
             if (availableCount > 0) {
-                LOGGER.info("\u5b58\u50a8\u5bb9\u5668\u4e2d\u6709\u90e8\u5206 " + targetItem.getDescriptionId() + " (\u9700\u8981: " + requiredCount + ", \u53ef\u7528: " + availableCount + "), \u5c1d\u8bd5\u5408\u6210\u5269\u4f59\u90e8\u5206");
+                LOGGER.debug("\u5b58\u50a8\u5bb9\u5668\u4e2d\u6709\u90e8\u5206 " + targetItem.getDescriptionId() + " (\u9700\u8981: " + requiredCount + ", \u53ef\u7528: " + availableCount + "), \u5c1d\u8bd5\u5408\u6210\u5269\u4f59\u90e8\u5206");
                 int remainingNeeded = requiredCount - availableCount;
                 boolean wasInVisited = visitedItems.remove(targetItem);
                 HashMap<Item, Integer> availableAfterUsing = new HashMap<Item, Integer>(availableItems);
@@ -285,17 +314,17 @@ public class RecipeResolver {
             }
         }
         List<Recipe<?>> recipes = this.getRecipesForItem(targetItem);
-        LOGGER.info("\u4e3a\u7269\u54c1 " + targetItem.getDescriptionId() + " \u627e\u5230 " + recipes.size() + " \u4e2a\u914d\u65b9");
+        LOGGER.debug("\u4e3a\u7269\u54c1 " + targetItem.getDescriptionId() + " \u627e\u5230 " + recipes.size() + " \u4e2a\u914d\u65b9");
         for (int i = 0; i < recipes.size(); ++i) {
             Recipe<?> recipe = recipes.get(i);
-            LOGGER.info("\u914d\u65b9 {}: {} - \u7ed3\u679c: {}", new Object[]{i + 1, recipe.getClass().getSimpleName(), recipe.getResultItem((HolderLookup.Provider)this.registryAccess).getDescriptionId()});
+            LOGGER.debug("\u914d\u65b9 {}: {} - \u7ed3\u679c: {}", new Object[]{i + 1, recipe.getClass().getSimpleName(), recipe.getResultItem((HolderLookup.Provider)this.registryAccess).getDescriptionId()});
             Map<Item, Integer> materials = this.getRequiredMaterials(recipe, 1);
             for (Map.Entry entry : materials.entrySet()) {
-                LOGGER.info("  - \u6750\u6599: {} x{}", (Object)((Item)entry.getKey()).getDescriptionId(), entry.getValue());
+                LOGGER.debug("  - \u6750\u6599: {} x{}", (Object)((Item)entry.getKey()).getDescriptionId(), entry.getValue());
             }
         }
         if (recipes.isEmpty()) {
-            LOGGER.info("\u65e0\u6cd5\u83b7\u5f97\u7269\u54c1: " + targetItem.getDescriptionId() + " \u9700\u8981: " + requiredCount + " \u4e14\u6ca1\u6709\u53ef\u7528\u914d\u65b9");
+            LOGGER.debug("\u65e0\u6cd5\u83b7\u5f97\u7269\u54c1: " + targetItem.getDescriptionId() + " \u9700\u8981: " + requiredCount + " \u4e14\u6ca1\u6709\u53ef\u7528\u914d\u65b9");
             HashMap<Item, Integer> baseMaterials = new HashMap<Item, Integer>();
             int available = availableItems.getOrDefault(targetItem, 0);
             int missing = Math.max(0, requiredCount - available);
@@ -305,24 +334,24 @@ public class RecipeResolver {
             return RecipeResolutionResult.failureWithConsumption("\u65e0\u6cd5\u901a\u8fc7\u4efb\u4f55\u914d\u65b9\u5408\u6210 " + String.valueOf(targetItem) + " (\u9700\u8981: " + requiredCount + ")", baseMaterials);
         }
         visitedItems.add(targetItem);
-        LOGGER.info("\u5c06 {} \u6dfb\u52a0\u5230visitedItems: {}", (Object)targetItem.getDescriptionId(), visitedItems.stream().map(Item::getDescriptionId).toList());
+        LOGGER.debug("\u5c06 {} \u6dfb\u52a0\u5230visitedItems: {}", (Object)targetItem.getDescriptionId(), visitedItems.stream().map(Item::getDescriptionId).toList());
         ArrayList<RecipeResolutionResult> possiblePaths = new ArrayList<RecipeResolutionResult>();
         ArrayList<RecipeResolutionResult> failedPaths = new ArrayList<RecipeResolutionResult>();
         for (Recipe<?> recipe : recipes) {
-            LOGGER.info("\u5c1d\u8bd5\u914d\u65b9\u8def\u5f84: {} \u5bf9\u4e8e\u7269\u54c1 {}", (Object)recipe.getClass().getSimpleName(), (Object)targetItem.getDescriptionId());
+            LOGGER.debug("\u5c1d\u8bd5\u914d\u65b9\u8def\u5f84: {} \u5bf9\u4e8e\u7269\u54c1 {}", (Object)recipe.getClass().getSimpleName(), (Object)targetItem.getDescriptionId());
             HashSet<Item> hashSet = new HashSet<Item>(visitedItems);
-            LOGGER.info("\u4e3a\u914d\u65b9\u8def\u5f84\u521b\u5efavisitedItems\u526f\u672c: {}", hashSet.stream().map(Item::getDescriptionId).toList());
+            LOGGER.debug("\u4e3a\u914d\u65b9\u8def\u5f84\u521b\u5efavisitedItems\u526f\u672c: {}", hashSet.stream().map(Item::getDescriptionId).toList());
             RecipeResolutionResult pathResult = this.tryRecipePath(recipe, requiredCount, availableItems, hashSet, depth + 1);
             if (pathResult.isSuccess()) {
-                LOGGER.info("\u914d\u65b9\u8def\u5f84\u6210\u529f: {} \u5bf9\u4e8e\u7269\u54c1 {}", (Object)recipe.getClass().getSimpleName(), (Object)targetItem.getDescriptionId());
+                LOGGER.debug("\u914d\u65b9\u8def\u5f84\u6210\u529f: {} \u5bf9\u4e8e\u7269\u54c1 {}", (Object)recipe.getClass().getSimpleName(), (Object)targetItem.getDescriptionId());
                 possiblePaths.add(pathResult);
                 continue;
             }
-            LOGGER.info("\u914d\u65b9\u8def\u5f84\u5931\u8d25: {} \u5bf9\u4e8e\u7269\u54c1 {} - {}", new Object[]{recipe.getClass().getSimpleName(), targetItem.getDescriptionId(), pathResult.getErrorMessage()});
+            LOGGER.debug("\u914d\u65b9\u8def\u5f84\u5931\u8d25: {} \u5bf9\u4e8e\u7269\u54c1 {} - {}", new Object[]{recipe.getClass().getSimpleName(), targetItem.getDescriptionId(), pathResult.getErrorMessage()});
             failedPaths.add(pathResult);
         }
         visitedItems.remove(targetItem);
-        LOGGER.info("\u4ecevisitedItems\u4e2d\u79fb\u9664 {}: {}", (Object)targetItem.getDescriptionId(), visitedItems.stream().map(Item::getDescriptionId).toList());
+        LOGGER.debug("\u4ecevisitedItems\u4e2d\u79fb\u9664 {}: {}", (Object)targetItem.getDescriptionId(), visitedItems.stream().map(Item::getDescriptionId).toList());
         if (possiblePaths.isEmpty()) {
             return RecipeResolver.selectBestFailure(targetItem, requiredCount, failedPaths);
         }
@@ -349,9 +378,34 @@ public class RecipeResolver {
             return success;
         }
         if (failures.isEmpty()) {
-            return RecipeResolutionResult.failure("\u65e0\u6cd5\u5408\u6210\u8be5\u7269\u54c1\u6240\u9700\u6750\u6599");
+            return this.reportRecipeMissing(recipe, requiredCount, recipeYield, availableItems);
         }
         return RecipeResolver.selectBestFailure(result.getItem(), requiredCount, failures);
+    }
+
+    /** \u515c\u5e95:\u5f53\u56de\u6eaf\u6ca1\u6709\u8bb0\u5f55\u5177\u4f53\u5931\u8d25\u65f6,\u6309\u6bcf\u4e2a\u539f\u6599\u7ec4\u7684"\u9700\u8981\u91cf - \u4ed3\u5e93\u91cf"\u76f4\u63a5\u4f30\u7b97\u7f3a\u5931,\u7ed9\u51fa\u660e\u786e\u63d0\u793a(\u5982\u7f3a\u5c11\u7ea2\u77f3)\u3002 */
+    private RecipeResolutionResult reportRecipeMissing(Recipe<?> recipe, int requiredCount, int recipeYield, Map<Item, Integer> availableItems) {
+        int craftingTimes = (int)Math.ceil((double)requiredCount / (double)recipeYield);
+        HashMap<Item, Integer> missing = new HashMap<Item, Integer>();
+        for (IngredientGroup group : this.buildIngredientGroups(recipe)) {
+            int needed = group.slotCount * craftingTimes;
+            List<Item> candidates = this.orderedIngredientCandidates(group.ingredient, availableItems);
+            if (candidates.isEmpty()) {
+                continue;
+            }
+            long have = 0L;
+            for (Item candidate : candidates) {
+                have += (long)availableItems.getOrDefault(candidate, 0);
+            }
+            long stillNeed = Math.max(0L, (long)needed - have);
+            if (stillNeed > 0L) {
+                missing.merge(candidates.get(0), (int)Math.min(stillNeed, (long)Integer.MAX_VALUE), Integer::sum);
+            }
+        }
+        if (missing.isEmpty()) {
+            return RecipeResolutionResult.failure("\u65e0\u6cd5\u5408\u6210\u8be5\u7269\u54c1\u6240\u9700\u6750\u6599");
+        }
+        return RecipeResolutionResult.failure("\u7f3a\u5c11\u6750\u6599", missing);
     }
 
     private RecipeResolutionResult tryResolveIngredientGroups(Recipe<?> recipe, int recipeYield, int craftingTimes, Map<Item, Integer> availableItems, Set<Item> visitedItems, int depth, List<IngredientGroup> groups, int groupIndex, Item[] chosen, List<CraftingStep> stepsAccum, Map<Item, Integer> consumptionAccum, List<RecipeResolutionResult> failures) {
@@ -361,8 +415,14 @@ public class RecipeResolver {
         IngredientGroup group = groups.get(groupIndex);
         int needed = group.slotCount * craftingTimes;
         for (Item candidate : this.orderedIngredientCandidates(group.ingredient, availableItems)) {
+            if (this.checkTimeout()) {
+                return null;
+            }
+            if (visitedItems.contains(candidate)) {
+                continue;
+            }
             HashSet<Item> materialVisited = new HashSet<Item>(visitedItems);
-            RecipeResolutionResult materialResult = this.resolveRecipeRecursive(candidate, needed, availableItems, materialVisited, depth + 1);
+            RecipeResolutionResult materialResult = this.resolveRecipeRecursiveCraftingOnly(candidate, needed, availableItems, materialVisited, depth + 1);
             if (materialResult.isSuccess()) {
                 ArrayList<CraftingStep> steps = new ArrayList<CraftingStep>(stepsAccum);
                 steps.addAll(materialResult.getCraftingSteps());
@@ -529,6 +589,9 @@ public class RecipeResolver {
             }
         }
         availableFirst.addAll(rest);
+        if (availableFirst.size() > MAX_INGREDIENT_CANDIDATES) {
+            return new ArrayList<Item>(availableFirst.subList(0, MAX_INGREDIENT_CANDIDATES));
+        }
         return availableFirst;
     }
 
@@ -566,7 +629,7 @@ public class RecipeResolver {
             }
             if (recipe instanceof SmithingTransformRecipe) {
                 SmithingTransformRecipe smithingTransformRecipe = (SmithingTransformRecipe)recipe;
-                LOGGER.info("\u5904\u7406SmithingTransformRecipe: {}", (Object)smithingTransformRecipe.getClass().getSimpleName());
+                LOGGER.debug("\u5904\u7406SmithingTransformRecipe: {}", (Object)smithingTransformRecipe.getClass().getSimpleName());
                 try {
                     Item item;
                     Field templateField = SmithingTransformRecipe.class.getDeclaredField("template");
@@ -578,7 +641,7 @@ public class RecipeResolver {
                     Ingredient templateIngredient = (Ingredient)templateField.get(smithingTransformRecipe);
                     Ingredient baseIngredient = (Ingredient)baseField.get(smithingTransformRecipe);
                     Ingredient additionIngredient = (Ingredient)additionField.get(smithingTransformRecipe);
-                    LOGGER.info("SmithingTransformRecipe\u6210\u5206\u83b7\u53d6\u6210\u529f");
+                    LOGGER.debug("SmithingTransformRecipe\u6210\u5206\u83b7\u53d6\u6210\u529f");
                     if (!templateIngredient.isEmpty() && (item = this.chooseIngredientItem(templateIngredient, availableItems)) != null && item != Items.AIR) {
                         materials.merge(item, craftingTimes, Integer::sum);
                     }
@@ -626,7 +689,10 @@ public class RecipeResolver {
         if (requiredCount <= 0) {
             return new MissingInfo(Collections.emptyMap(), depth);
         }
-        if (depth > 10) {
+        if (depth > 8) {
+            return null;
+        }
+        if (this.checkTimeout()) {
             return null;
         }
         if (targetItem == null || targetItem == Items.AIR) {
@@ -695,6 +761,12 @@ public class RecipeResolver {
         int needed = group.slotCount * craftingTimes;
         MissingCandidate best = null;
         for (Item candidate : this.orderedIngredientCandidates(group.ingredient, availableItems)) {
+            if (this.checkTimeout()) {
+                return null;
+            }
+            if (visitedItems.contains(candidate)) {
+                continue;
+            }
             HashMap<Item, Integer> snapshot = new HashMap<Item, Integer>(availableItems);
             HashSet<Item> visitedClone = new HashSet<Item>(visitedItems);
             MissingInfo part = this.computeMissingRecursiveCraftingOnlyWithDepth(candidate, needed, availableItems, visitedClone, depth + 1, maxDepthLimit);
@@ -713,6 +785,9 @@ public class RecipeResolver {
             availableItems.putAll(snapshot);
             if (deeper != null && (best == null || RecipeResolver.isMissingBetter(deeper.info.missing, best.info.missing))) {
                 best = deeper;
+                if (best.info.missing.isEmpty()) {
+                    return best;
+                }
             }
         }
         return best;
