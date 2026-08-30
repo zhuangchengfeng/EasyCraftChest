@@ -46,6 +46,7 @@ import com.mojang.logging.LogUtils;
 import com.stroeud.block.CustomStorageBlock;
 import com.stroeud.block.entity.ModBlockEntities;
 import com.stroeud.client.gui.CustomStorageScreen;
+import com.stroeud.config.ModConfigs;
 import com.stroeud.container.CustomStorageContainer;
 import com.stroeud.item.CustomStorageBlockItem;
 import com.stroeud.server.storage.CustomStorageManager;
@@ -69,6 +70,7 @@ import net.neoforged.bus.api.IEventBus;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.ModList;
 import net.neoforged.fml.common.Mod;
+import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.neoforged.neoforge.capabilities.Capabilities;
@@ -98,6 +100,7 @@ public class CustomStorageMod {
     }, FeatureFlags.DEFAULT_FLAGS));
 
     public CustomStorageMod(IEventBus modEventBus) {
+        ModList.get().getModContainerById("storageandoneclicksynthesis").ifPresent(c -> c.registerConfig(ModConfig.Type.SERVER, ModConfigs.SPEC, "storageandoneclicksynthesis.toml"));
         modEventBus.addListener(this::commonSetup);
         modEventBus.addListener(this::clientSetup);
         modEventBus.addListener(this::addCreative);

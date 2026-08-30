@@ -6,6 +6,7 @@ import com.stroeud.network.NetworkManager;
 import com.stroeud.network.StorageNetworkHandler;
 import com.stroeud.network.packet.SynthesisResultPacket;
 import com.stroeud.storage.CustomStorageData;
+import java.nio.charset.StandardCharsets;
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -43,30 +44,30 @@ extends AbstractContainerScreen<CustomStorageContainer> {
     private static final int GUI_WIDTH = 408;
     private static final int GUI_HEIGHT = 272;
     private static final int SLOT_SIZE = 18;
-    private static final int BACKGROUND_COLOR = -7631989;
+    private static final int BACKGROUND_COLOR = -6250336;
     private static final int BORDER_COLOR = -13158601;
-    private static final int SLOT_COLOR = -10855846;
-    private static final int SLOT_BORDER_COLOR = -13750738;
-    private static final int EMPTY_SLOT_COLOR = -12566464;
+    private static final int SLOT_COLOR = -8749702;
+    private static final int SLOT_BORDER_COLOR = -11184811;
+    private static final int EMPTY_SLOT_COLOR = -8749702;
     private static final int TITLE_COLOR = 0x404040;
     private static final float ITEM_COUNT_TEXT_SCALE = 0.5f;
     private static final int ITEM_COUNT_TEXT_COLOR = 0xFFFFFF;
 
     // 搜索框(背包栏上方,左移)
     private static final int SEARCH_BOX_X = 8;
-    private static final int SEARCH_BOX_Y = 156;
+    private static final int SEARCH_BOX_Y = 152;
     private static final int SEARCH_BOX_WIDTH = 110;
     private static final int CLEAR_BUTTON_X = SEARCH_BOX_X + SEARCH_BOX_WIDTH + 4;
     private static final int CLEAR_BUTTON_Y = SEARCH_BOX_Y - 1;
     // 右下角内嵌合成视图面板
     private static final int RECIPE_PANEL_X = 184;
-    private static final int RECIPE_PANEL_Y = 156;
+    private static final int RECIPE_PANEL_Y = 152;
     private static final int RECIPE_PANEL_WIDTH = 162;
     private static final int RECIPE_PANEL_HEIGHT = 108;
 
     // 左面板:仓库 9x6
     private static final int STORAGE_GRID_START_X = 8;
-    private static final int STORAGE_GRID_START_Y = 40;
+    private static final int STORAGE_GRID_START_Y = 36;
     private static final int STORAGE_COLS = 9;
     private static final int STORAGE_ROWS = 6;
     private static final int STORAGE_ITEMS_PER_PAGE = 54;
@@ -76,12 +77,12 @@ extends AbstractContainerScreen<CustomStorageContainer> {
     private static final int STORAGE_PAGE_INFO_Y = 22;
     // 玩家背包(左下)
     private static final int PLAYER_INV_START_X = 8;
-    private static final int PLAYER_INV_START_Y = 180;
-    private static final int PLAYER_HOTBAR_START_Y = 238;
+    private static final int PLAYER_INV_START_Y = 176;
+    private static final int PLAYER_HOTBAR_START_Y = 234;
     // 右面板:合成目录 9x6(与左侧一致)
     private static final int CATALOG_PANEL_X = 176;
     private static final int CATALOG_GRID_START_X = 184;
-    private static final int CATALOG_GRID_START_Y = 40;
+    private static final int CATALOG_GRID_START_Y = 36;
     private static final int CATALOG_COLS = 9;
     private static final int CATALOG_ROWS = 6;
     private static final int CATALOG_ITEMS_PER_PAGE = 54;
@@ -107,6 +108,7 @@ extends AbstractContainerScreen<CustomStorageContainer> {
     private int catalogPage = 0;
     private int catalogMaxPage = 0;
     private long lastClientUpdateTime = 0L;
+    private String storageSizeText = "";
     private static final Map<BlockPos, StoredState> STATE_CACHE = new HashMap<BlockPos, StoredState>();
     private static CustomStorageScreen currentInstance = null;
 
@@ -125,7 +127,7 @@ extends AbstractContainerScreen<CustomStorageContainer> {
     public CustomStorageScreen(CustomStorageContainer container, Inventory playerInventory, Component title) {
         super(container, playerInventory, title);
         this.imageWidth = 354;
-        this.imageHeight = 264;
+        this.imageHeight = 260;
         this.blockPos = container.getBlockPos();
         this.recipeView = new RecipeView(this.blockPos);
         currentInstance = this;
@@ -134,7 +136,7 @@ extends AbstractContainerScreen<CustomStorageContainer> {
     protected void init() {
         super.init();
         this.leftPos = (this.width - 354) / 2;
-        this.topPos = (this.height - 264) / 2;
+        this.topPos = (this.height - 260) / 2;
         StoredState saved = STATE_CACHE.get(this.blockPos);
         if (saved != null) {
             this.searchFilter = saved.searchFilter;
@@ -145,14 +147,14 @@ extends AbstractContainerScreen<CustomStorageContainer> {
             this.catalogAllItems = ItemCatalog.buildAllItems();
         }
         this.applyCatalogFilter();
-        this.searchBox = new EditBox(this.font, this.leftPos + 8, this.topPos + 156, 110, 14, Component.literal("Search"));
+        this.searchBox = new EditBox(this.font, this.leftPos + 8, this.topPos + 152, 110, 14, Component.literal("Search"));
         this.searchBox.setMaxLength(50);
         this.searchBox.setResponder(this::onSearchChanged);
         this.searchBox.setValue(this.searchFilter);
         this.addRenderableWidget(this.searchBox);
-        this.clearSearchButton = Button.builder(Component.literal("X"), button -> this.clearSearch()).bounds(this.leftPos + 122, this.topPos + 155, 16, 16).build();
+        this.clearSearchButton = Button.builder(Component.literal("X"), button -> this.clearSearch()).bounds(this.leftPos + 122, this.topPos + 151, 16, 16).build();
         this.addRenderableWidget(this.clearSearchButton);
-        this.recipeView.createControls(this.font, this.leftPos + 184, this.topPos + 156);
+        this.recipeView.createControls(this.font, this.leftPos + 184, this.topPos + 152);
         if (saved != null) {
             if (!saved.lastTargetItemId.isEmpty()) {
                 Item restoredItem = BuiltInRegistries.ITEM.get(ResourceLocation.tryParse(saved.lastTargetItemId));
@@ -184,15 +186,15 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         this.renderItemCounts(graphics, mouseX, mouseY);
         this.renderTooltips(graphics, mouseX, mouseY);
         this.renderCatalogTooltips(graphics, mouseX, mouseY);
-        this.recipeView.render(graphics, this.font, this.leftPos + 184, this.topPos + 156, mouseX, mouseY);
+        this.recipeView.render(graphics, this.font, this.leftPos + 184, this.topPos + 152, mouseX, mouseY);
     }
 
     protected void renderBg(GuiGraphics graphics, float partialTick, int mouseX, int mouseY) {
-        graphics.fill(this.leftPos, this.topPos, this.leftPos + 354, this.topPos + 264, -7631989);
-        this.drawBorder(graphics, this.leftPos, this.topPos, 354, 264, -13158601);
+        graphics.fill(this.leftPos, this.topPos, this.leftPos + 354, this.topPos + 260, -6250336);
+        this.drawBorder(graphics, this.leftPos, this.topPos, 354, 260, -13158601);
         // 右下角合成面板:独立子区域,亮色底 + 边框,四周留出可见边距(不贴到主界面边缘)
-        graphics.fill(this.leftPos + 184, this.topPos + 156, this.leftPos + 342, this.topPos + 256, -6710887);
-        this.drawBorder(graphics, this.leftPos + 184, this.topPos + 156, 158, 100, -13158601);
+        graphics.fill(this.leftPos + 184, this.topPos + 152, this.leftPos + 342, this.topPos + 252, -6710887);
+        this.drawBorder(graphics, this.leftPos + 184, this.topPos + 152, 158, 100, -13158601);
         graphics.drawString(this.font, this.title, this.leftPos + 8, this.topPos + 6, 0x404040, false);
         this.renderStorageGrid(graphics, mouseX, mouseY);
         this.renderCatalogGrid(graphics, mouseX, mouseY);
@@ -209,7 +211,7 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         List<Map.Entry<String, Long>> pageItems = this.getCurrentPageItems();
         for (int i = 0; i < 54; ++i) {
             int x = this.leftPos + 8 + i % 9 * 18;
-            int y = this.topPos + 40 + i / 9 * 18;
+            int y = this.topPos + 36 + i / 9 * 18;
             if (i < pageItems.size()) {
                 Map.Entry<String, Long> entry = pageItems.get(i);
                 this.renderItemSlot(graphics, x, y, entry.getKey(), entry.getValue(), mouseX, mouseY);
@@ -225,20 +227,20 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         for (int i = startIndex; i < endIndex; ++i) {
             int gridIndex = i - startIndex;
             int x = this.leftPos + 184 + gridIndex % 9 * 18;
-            int y = this.topPos + 40 + gridIndex / 9 * 18;
+            int y = this.topPos + 36 + gridIndex / 9 * 18;
             this.renderCatalogSlot(graphics, x, y, this.catalogFilteredItems.get(i), mouseX, mouseY);
         }
         for (int i = endIndex - startIndex; i < 54; ++i) {
             int x = this.leftPos + 184 + i % 9 * 18;
-            int y = this.topPos + 40 + i / 9 * 18;
+            int y = this.topPos + 36 + i / 9 * 18;
             this.renderCatalogEmptySlot(graphics, x, y);
         }
     }
 
     private void renderItemSlot(GuiGraphics graphics, int x, int y, String itemKey, long count, int mouseX, int mouseY) {
         ItemStack stack;
-        graphics.fill(x, y, x + 16, y + 16, -10855846);
-        this.drawBorder(graphics, x, y, 16, 16, -13750738);
+        graphics.fill(x, y, x + 16, y + 16, -8749702);
+        this.drawBorder(graphics, x, y, 16, 16, -11184811);
         if (mouseX >= x && mouseX < x + 16 && mouseY >= y && mouseY < y + 16) {
             graphics.fill(x + 1, y + 1, x + 15, y + 15, -2130706433);
         }
@@ -250,8 +252,8 @@ extends AbstractContainerScreen<CustomStorageContainer> {
 
     private void renderEmptySlot(GuiGraphics graphics, int x, int y, int mouseX, int mouseY) {
         boolean isHovered;
-        graphics.fill(x, y, x + 16, y + 16, -12566464);
-        this.drawBorder(graphics, x, y, 16, 16, -13750738);
+        graphics.fill(x, y, x + 16, y + 16, -8749702);
+        this.drawBorder(graphics, x, y, 16, 16, -11184811);
         boolean bl = isHovered = mouseX >= x && mouseX < x + 16 && mouseY >= y && mouseY < y + 16;
         if (isHovered) {
             ItemStack carriedItem = ((CustomStorageContainer)this.menu).getCarried();
@@ -264,8 +266,10 @@ extends AbstractContainerScreen<CustomStorageContainer> {
     }
 
     private void renderCatalogSlot(GuiGraphics graphics, int x, int y, ItemStack stack, int mouseX, int mouseY) {
-        graphics.fill(x, y, x + 16, y + 16, -10855846);
-        this.drawBorder(graphics, x, y, 16, 16, -13750738);
+        // 合成过的物品用金色边框标记,与未合成过的区分
+        boolean synthesized = !stack.isEmpty() && SynthesisStats.getCount(stack.getItem()) > 0;
+        graphics.fill(x, y, x + 16, y + 16, -8749702);
+        this.drawBorder(graphics, x, y, 16, 16, synthesized ? -2643968 : -11184811);
         if (mouseX >= x && mouseX < x + 16 && mouseY >= y && mouseY < y + 16) {
             graphics.fill(x + 1, y + 1, x + 15, y + 15, -2130706433);
         }
@@ -277,51 +281,55 @@ extends AbstractContainerScreen<CustomStorageContainer> {
     }
 
     private void renderCatalogEmptySlot(GuiGraphics graphics, int x, int y) {
-        graphics.fill(x, y, x + 16, y + 16, -12566464);
-        this.drawBorder(graphics, x, y, 16, 16, -13750738);
+        graphics.fill(x, y, x + 16, y + 16, -8749702);
+        this.drawBorder(graphics, x, y, 16, 16, -11184811);
     }
 
     private void renderPlayerInventorySlots(GuiGraphics graphics) {
         for (int row = 0; row < 3; ++row) {
             for (int col = 0; col < 9; ++col) {
                 int x = this.leftPos + 8 + col * 18;
-                int y = this.topPos + 180 + row * 18;
+                int y = this.topPos + 176 + row * 18;
                 this.renderSlotBackground(graphics, x, y);
             }
         }
         for (int col = 0; col < 9; ++col) {
             int x = this.leftPos + 8 + col * 18;
-            int y = this.topPos + 238;
+            int y = this.topPos + 234;
             this.renderSlotBackground(graphics, x, y);
         }
     }
 
     private void renderSlotBackground(GuiGraphics graphics, int x, int y) {
-        graphics.fill(x, y, x + 16, y + 16, -10855846);
-        this.drawBorder(graphics, x, y, 16, 16, -13750738);
+        graphics.fill(x, y, x + 16, y + 16, -8749702);
+        this.drawBorder(graphics, x, y, 16, 16, -11184811);
     }
 
     private void renderStatistics(GuiGraphics graphics) {
         Component stats = Component.translatable("gui.storageandoneclicksynthesis.stats", this.totalTypes, this.formatCount(this.totalItems));
         int x = this.leftPos + 8 + this.font.width(this.title) + 8;
         graphics.drawString(this.font, stats, x, this.topPos + 6, 0x404040, false);
+        // if (!this.storageSizeText.isEmpty()) { // 字节大小功能暂不使用,已注释
+        //     String sizeText = " | 约 " + this.storageSizeText;
+        //     graphics.drawString(this.font, sizeText, x + this.font.width(stats) + 4, this.topPos + 6, 0x404040, false);
+        // }
     }
 
     private void renderStoragePageInfo(GuiGraphics graphics) {
         String pageInfo = String.format("%d/%d", this.currentPage + 1, this.maxPage + 1);
         graphics.pose().pushPose();
-        graphics.pose().scale(0.5f, 0.5f, 1.0f);
-        int centerX = (this.leftPos + 89) * 2 - this.font.width(pageInfo) / 2;
-        graphics.drawString(this.font, pageInfo, centerX, (this.topPos + 34) * 2, 0x404040, false);
+        graphics.pose().scale(0.75f, 0.75f, 1.0f);
+        int centerX = (int)((this.leftPos + 89) / 0.75f) - this.font.width(pageInfo) / 2;
+        graphics.drawString(this.font, pageInfo, centerX, (int)((this.topPos + 30) / 0.75f), 0x404040, false);
         graphics.pose().popPose();
     }
 
     private void renderCatalogPageInfo(GuiGraphics graphics) {
         String pageInfo = String.format("%d/%d", this.catalogPage + 1, this.catalogMaxPage + 1);
         graphics.pose().pushPose();
-        graphics.pose().scale(0.5f, 0.5f, 1.0f);
-        int centerX = (this.leftPos + 265) * 2 - this.font.width(pageInfo) / 2;
-        graphics.drawString(this.font, pageInfo, centerX, (this.topPos + 34) * 2, 0x404040, false);
+        graphics.pose().scale(0.75f, 0.75f, 1.0f);
+        int centerX = (int)((this.leftPos + 265) / 0.75f) - this.font.width(pageInfo) / 2;
+        graphics.drawString(this.font, pageInfo, centerX, (int)((this.topPos + 30) / 0.75f), 0x404040, false);
         graphics.pose().popPose();
     }
 
@@ -332,7 +340,7 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         graphics.pose().scale(0.5f, 0.5f, 1.0f);
         for (int i = 0; i < 54 && i < pageItems.size(); ++i) {
             float scaledX = (float)(this.leftPos + 8 + i % 9 * 18) / 0.5f;
-            float scaledY = (float)(this.topPos + 40 + i / 9 * 18) / 0.5f;
+            float scaledY = (float)(this.topPos + 36 + i / 9 * 18) / 0.5f;
             Map.Entry<String, Long> entry = pageItems.get(i);
             long count = entry.getValue();
             String countText = this.formatCount(count);
@@ -407,6 +415,11 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         if (catalogIndex >= 0) {
             if (button == 0) {
                 this.recipeView.setTarget(this.catalogFilteredItems.get(catalogIndex));
+                this.saveState();
+            } else if (button == 1) {
+                // 右键快捷合成:按输入框次数直接合成
+                this.recipeView.setTarget(this.catalogFilteredItems.get(catalogIndex));
+                this.recipeView.quickSynthesize();
                 this.saveState();
             }
             return true;
@@ -584,11 +597,11 @@ extends AbstractContainerScreen<CustomStorageContainer> {
     }
 
     private boolean isInStorageGrid(double mouseX, double mouseY) {
-        return mouseX >= (double)(this.leftPos + 8) && mouseX < (double)(this.leftPos + 8 + 9 * 18) && mouseY >= (double)(this.topPos + 40) && mouseY < (double)(this.topPos + 40 + 6 * 18);
+        return mouseX >= (double)(this.leftPos + 8) && mouseX < (double)(this.leftPos + 8 + 9 * 18) && mouseY >= (double)(this.topPos + 36) && mouseY < (double)(this.topPos + 36 + 6 * 18);
     }
 
     private boolean isInCatalogGrid(double mouseX, double mouseY) {
-        return mouseX >= (double)(this.leftPos + 184) && mouseX < (double)(this.leftPos + 184 + 9 * 18) && mouseY >= (double)(this.topPos + 40) && mouseY < (double)(this.topPos + 40 + 6 * 18);
+        return mouseX >= (double)(this.leftPos + 184) && mouseX < (double)(this.leftPos + 184 + 9 * 18) && mouseY >= (double)(this.topPos + 36) && mouseY < (double)(this.topPos + 36 + 6 * 18);
     }
 
     private void updatePageButtons() {
@@ -609,6 +622,15 @@ extends AbstractContainerScreen<CustomStorageContainer> {
             if (!ItemCatalog.matchesSearchFilter(stack, this.searchFilter)) continue;
             this.catalogFilteredItems.add(stack);
         }
+        // 按历史合成次数降序排序:常合成的物品置顶在最前,其余按名称
+        this.catalogFilteredItems.sort((a, b) -> {
+            int ca = SynthesisStats.getCount(a.getItem());
+            int cb = SynthesisStats.getCount(b.getItem());
+            if (ca != cb) {
+                return Integer.compare(cb, ca);
+            }
+            return a.getHoverName().getString().compareToIgnoreCase(b.getHoverName().getString());
+        });
         this.catalogMaxPage = Math.max(0, (this.catalogFilteredItems.size() - 1) / 54);
         if (this.catalogPage > this.catalogMaxPage) {
             this.catalogPage = this.catalogMaxPage;
@@ -645,7 +667,7 @@ extends AbstractContainerScreen<CustomStorageContainer> {
 
     private int getStorageSlotAt(int mouseX, int mouseY) {
         int relX = mouseX - this.leftPos - 8;
-        int relY = mouseY - this.topPos - 40;
+        int relY = mouseY - this.topPos - 36;
         if (relX >= 0 && relY >= 0) {
             int col = relX / 18;
             int row = relY / 18;
@@ -658,7 +680,7 @@ extends AbstractContainerScreen<CustomStorageContainer> {
 
     private int getCatalogSlotAt(int mouseX, int mouseY) {
         int relX = mouseX - this.leftPos - 184;
-        int relY = mouseY - this.topPos - 40;
+        int relY = mouseY - this.topPos - 36;
         if (relX >= 0 && relY >= 0) {
             int col = relX / 18;
             int row = relY / 18;
@@ -742,8 +764,34 @@ extends AbstractContainerScreen<CustomStorageContainer> {
                 catch (Exception exception) {}
             }
         }
+        // this.estimateAndCacheStorageSize(cachedData); // 字节大小功能暂不使用,已注释
         this.applyStorageFilter();
         this.updatePageButtons();
+    }
+
+    /** 本地估算容器数据字节大小(刷新时算一次并缓存,渲染直接读)。特殊 NBT 物品按粗略大小估算。 */
+    private void estimateAndCacheStorageSize(Map<String, CompoundTag> cachedData) {
+        long bytes = 0L;
+        for (Map.Entry<String, Long> e : this.storageData.entrySet()) {
+            if (e.getKey() == null) continue;
+            bytes += e.getKey().getBytes(StandardCharsets.UTF_8).length + 16L;
+        }
+        if (cachedData != null) {
+            for (Map.Entry<String, CompoundTag> e : cachedData.entrySet()) {
+                bytes += (e.getKey() == null ? 0 : e.getKey().length()) * 2 + 200L;
+            }
+        }
+        this.storageSizeText = CustomStorageScreen.formatBytes(bytes);
+    }
+
+    private static String formatBytes(long bytes) {
+        if (bytes < 1024L) {
+            return bytes + " B";
+        }
+        if (bytes < 1024L * 1024L) {
+            return String.format("%.1f KB", (double)bytes / 1024.0);
+        }
+        return String.format("%.1f MB", (double)bytes / (1024.0 * 1024.0));
     }
 
     public boolean isPauseScreen() {
@@ -762,9 +810,17 @@ extends AbstractContainerScreen<CustomStorageContainer> {
     public void handleDropResponse(boolean success) {
     }
 
-    /** 服务端发来的合成结果:让右下角配方栏直接显示缺失材料/错误/成功。 */
+    /** 服务端发来的合成结果:成功则记录历史合成次数并置顶,失败则显示缺失材料。 */
     public void handleSynthesisResult(SynthesisResultPacket packet) {
         if (packet != null) {
+            if (packet.success()) {
+                ItemStack target = this.recipeView.getTargetItem();
+                if (!target.isEmpty()) {
+                    SynthesisStats.recordSynthesis(target.getItem());
+                    this.applyCatalogFilter();
+                    this.updatePageButtons();
+                }
+            }
             this.recipeView.showResult(packet.success(), packet.message(), packet.missing());
         }
     }

@@ -52,6 +52,7 @@ public class RecipeView {
     private ItemStack hoveredStack = ItemStack.EMPTY;
     private final List<String> resultLines = new ArrayList<String>();
     private boolean resultIsError = false;
+    private long resultSetTime = 0L;
 
     public RecipeView(BlockPos storagePos) {
         this.storagePos = storagePos;
@@ -75,7 +76,8 @@ public class RecipeView {
         this.resultLines.clear();
         this.resultIsError = !success;
         if (!success && missing != null && !missing.isEmpty()) {
-            this.resultLines.add("缺少材料:");
+            String targetName = this.targetItem == null || this.targetItem.isEmpty() ? "" : this.targetItem.getHoverName().getString();
+            this.resultLines.add("合成" + targetName + "缺少材料:");
             for (Map.Entry<String, Long> e : missing.entrySet()) {
                 if (this.resultLines.size() >= 4) {
                     break;
@@ -88,10 +90,12 @@ public class RecipeView {
         } else if (message != null && !message.isEmpty()) {
             this.resultLines.add(message);
         }
+        this.resultSetTime = System.currentTimeMillis();
     }
 
     public void clearResult() {
         this.resultLines.clear();
+        this.resultSetTime = 0L;
     }
 
     public boolean hasRecipes() {
@@ -205,6 +209,10 @@ public class RecipeView {
 
     public void render(GuiGraphics graphics, Font font, int px, int py, int mouseX, int mouseY) {
         this.hoveredStack = ItemStack.EMPTY;
+        // 合成成功/失败提示 3 秒后自动复原为配方显示
+        if (!this.resultLines.isEmpty() && this.resultSetTime > 0L && System.currentTimeMillis() - this.resultSetTime > 3000L) {
+            this.clearResult();
+        }
         if (!this.hasRecipes() || this.targetItem.isEmpty()) {
             String hint = "点击右侧物品查看配方";
             int hx = px + (162 - font.width(hint)) / 2;
@@ -361,12 +369,12 @@ public class RecipeView {
         graphics.fill(x - 1, y - 1, x, y + 17, -11184811);
         graphics.fill(x + 16, y, x + 17, y + 17, -1);
         graphics.fill(x, y + 16, x + 17, y + 17, -1);
-        graphics.fill(x, y, x + 16, y + 16, -7631989);
+        graphics.fill(x, y, x + 16, y + 16, -6250336);
     }
 
     private void renderArrow(GuiGraphics graphics, Font font, int x, int y) {
         // JEI 风格右箭头:横杆 + 三角头,尖端朝右(从原料指向产物)
-        int color = 0xFF9A9A9A;
+        int color = 0xFF3F3F3F;
         graphics.fill(x, y + 6, x + 9, y + 8, color);
         graphics.fill(x + 9, y + 2, x + 11, y + 12, color);
         graphics.fill(x + 11, y + 4, x + 13, y + 10, color);
@@ -401,6 +409,11 @@ public class RecipeView {
             return true;
         }
         return false;
+    }
+
+    /** 右键快捷合成:直接按当前合成次数输入框的值发起一次合成(失败也会显示提示)。 */
+    public void quickSynthesize() {
+        this.onTrySynthesis();
     }
 
     private void onTrySynthesis() {

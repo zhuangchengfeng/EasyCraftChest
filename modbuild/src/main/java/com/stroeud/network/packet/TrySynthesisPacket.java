@@ -29,6 +29,7 @@ package com.stroeud.network.packet;
 
 import com.mojang.logging.LogUtils;
 import com.stroeud.block.CustomStorageBlock;
+import com.stroeud.config.ModConfigs;
 import com.stroeud.network.NetworkManager;
 import com.stroeud.server.recipe.CraftingStep;
 import com.stroeud.server.recipe.RecipeResolutionResult;
@@ -157,9 +158,9 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
                         this.sendSynthesisResult(serverPlayer, false, "\u8be5\u7269\u54c1\u65e0\u5de5\u4f5c\u53f0\u914d\u65b9", null);
                         return;
                     }
-                    // \u540c\u6b65\u89e3\u6790(\u5e26 10 \u79d2\u8d85\u65f6\u4fdd\u62a4)\u3002\u4e0d\u4f7f\u7528\u540e\u53f0\u7ebf\u7a0b:NeoForge \u914d\u65b9/\u6ce8\u518c\u8868\u4ece\u975e\u4e3b\u7ebf\u7a0b\u8bfb\u53d6\u53ef\u80fd\u4e0d\u53ef\u9760,
-                    // \u5bfc\u81f4\u89e3\u6790\u62ff\u4e0d\u5230\u914d\u65b9\u800c\u8bef\u62a5\u5931\u8d25\u3002\u9632\u5361\u6b7b\u5df2\u7531\u5019\u9009\u4e0a\u9650/\u6df1\u5ea6/\u77ed\u8def\u4fdd\u8bc1\u3002
-                    recipeResolver.setDeadline(System.currentTimeMillis() + 10000L);
+                    // \u540c\u6b65\u89e3\u6790(\u5e26 2 \u79d2\u8d85\u65f6\u4fdd\u62a4)\u3002\u4e0d\u4f7f\u7528\u540e\u53f0\u7ebf\u7a0b:NeoForge \u914d\u65b9/\u6ce8\u518c\u8868\u4ece\u975e\u4e3b\u7ebf\u7a0b\u8bfb\u53d6\u53ef\u80fd\u4e0d\u53ef\u9760,
+                    // \u5bfc\u81f4\u89e3\u6790\u62ff\u4e0d\u5230\u914d\u65b9\u800c\u8bef\u62a5\u5931\u8d25\u3002\u9632\u5361\u6b7b\u5df2\u7531\u5019\u9009\u4e0a\u9650/\u6df1\u5ea6/\u8282\u70b9\u9884\u7b97\u4fdd\u8bc1\u3002
+                    recipeResolver.setDeadline(System.currentTimeMillis() + (long)ModConfigs.SYNTHESIS_TIMEOUT_MILLIS.get());
                     ResolutionOutcome outcome = TrySynthesisPacket.resolveOutcome(recipeResolver, this.targetItem.copy(), this.synthesisCount, availableForPlanning);
                     this.applyOutcome(serverPlayer, storageManager, storageData, outcome, recipeResolver);
                 }
@@ -179,7 +180,9 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
             if (missing != null && !missing.isEmpty()) {
                 return new ResolutionOutcome(missing, null);
             }
+            resolver.resetResolutionBudget();
             RecipeResolutionResult result = resolver.resolveRecipeCraftingOnly(targetStack, count, availableForPlanning);
+            LOGGER.info("合成解析完成,目标: {}, 消耗节点数: {}", targetStack.getHoverName().getString(), resolver.getResolutionNodes());
             if (resolver.isTimedOut()) {
                 return new ResolutionOutcome(null, RecipeResolutionResult.failure("合成解析超时"));
             }

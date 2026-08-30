@@ -130,7 +130,8 @@ public final class ItemCatalog {
 
     private static String getItemUid(ItemStack stack) {
         try {
-            return BuiltInRegistries.ITEM.getKey(stack.getItem()).toString() + (!stack.getComponents().isEmpty() ? stack.getComponents().toString() : "");
+            // 只按基础物品 ID 去重,忽略 NBT/组件变体(如画的不同 motive),避免同一物品类型出现一堆变体条目
+            return BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
         }
         catch (Exception e) {
             return null;

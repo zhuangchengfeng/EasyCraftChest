@@ -27,6 +27,7 @@
 package com.stroeud.server.recipe;
 
 import com.mojang.logging.LogUtils;
+import com.stroeud.config.ModConfigs;
 import com.stroeud.server.recipe.CraftingStep;
 import com.stroeud.server.recipe.RecipeResolutionResult;
 import java.lang.reflect.Field;
@@ -51,6 +52,7 @@ import net.minecraft.world.item.crafting.BlastingRecipe;
 import net.minecraft.world.item.crafting.CraftingRecipe;
 import net.minecraft.world.item.crafting.Ingredient;
 import net.minecraft.world.item.crafting.Recipe;
+import net.minecraft.world.item.crafting.RecipeHolder;
 import net.minecraft.world.item.crafting.RecipeManager;
 import net.minecraft.world.item.crafting.RecipeType;
 import net.minecraft.world.item.crafting.SmeltingRecipe;
@@ -63,20 +65,25 @@ import org.slf4j.Logger;
 
 public class RecipeResolver {
     private static final Logger LOGGER = LogUtils.getLogger();
-    /** 每个原料标签最多尝试的候选数量上限,防止大标签(如 #logs)在回溯时指数爆炸导致服务端卡死。 */
-    private static final int MAX_INGREDIENT_CANDIDATES = 12;
     private volatile boolean timedOut = false;
     private long deadlineMs = Long.MAX_VALUE;
+    /** 解析节点计数:超过上限立即中止,防止染色等密集配方图导致指数爆炸卡死服务端。 */
+    private int resolutionNodes = 0;
+    private final int maxResolutionNodes;
+    private final int maxIngredientCandidates;
+    private final int maxDepth;
     private final Level level;
     private final RecipeManager recipeManager;
     private final RegistryAccess registryAccess;
     private final Map<Item, List<Recipe<?>>> recipeCache = new HashMap();
-    private final Map<Item, List<CraftingRecipe>> craftingRecipeCache = new HashMap<Item, List<CraftingRecipe>>();
 
     public RecipeResolver(Level level) {
         this.level = level;
         this.recipeManager = level.getRecipeManager();
         this.registryAccess = level.registryAccess();
+        this.maxResolutionNodes = ModConfigs.MAX_RESOLUTION_NODES.get();
+        this.maxIngredientCandidates = ModConfigs.MAX_INGREDIENT_CANDIDATES.get();
+        this.maxDepth = ModConfigs.MAX_SYNTHESIS_DEPTH.get();
     }
 
     /** 设置解析截止时间(毫秒时间戳)。超过后热点循环会放弃并标记超时。 */
@@ -88,7 +95,27 @@ public class RecipeResolver {
         return this.timedOut;
     }
 
+    /** 重置节点预算:每个配方独立,一个密集配方爆炸不会污染其它配方。 */
+    public void resetResolutionBudget() {
+        this.resolutionNodes = 0;
+        this.timedOut = false;
+    }
+
+    public int getResolutionNodes() {
+        return this.resolutionNodes;
+    }
+
+    /** 节点预算:每个配方独立,爆炸时快速中止(不管截止时间)。 */
     private boolean checkTimeout() {
+        if (++this.resolutionNodes > this.maxResolutionNodes) {
+            this.timedOut = true;
+            return true;
+        }
+        return false;
+    }
+
+    /** 截止时间:整个合成解析总时限,只在配方边界检查,避免慢配方连累后续配方。 */
+    private boolean checkDeadline() {
         if (System.currentTimeMillis() > this.deadlineMs) {
             this.timedOut = true;
             return true;
@@ -181,8 +208,11 @@ public class RecipeResolver {
 
     private RecipeResolutionResult resolveRecipeRecursiveCraftingOnly(Item targetItem, int requiredCount, Map<Item, Integer> availableItems, Set<Item> visitedItems, int depth) {
         List<CraftingRecipe> recipes;
-        if (depth > 8) {
+        if (depth > this.maxDepth) {
             return RecipeResolutionResult.failure("\u9012\u5f52\u6df1\u5ea6\u8fc7\u6df1");
+        }
+        if (depth == 0 && this.checkDeadline()) {
+            return RecipeResolutionResult.failure("\u5408\u6210\u89e3\u6790\u8d85\u65f6");
         }
         if (this.checkTimeout()) {
             return RecipeResolutionResult.failure("\u5408\u6210\u89e3\u6790\u8d85\u65f6");
@@ -226,11 +256,14 @@ public class RecipeResolver {
         ArrayList<RecipeResolutionResult> possiblePaths = new ArrayList<RecipeResolutionResult>();
         ArrayList<RecipeResolutionResult> failedPaths = new ArrayList<RecipeResolutionResult>();
         for (CraftingRecipe recipe : recipes) {
+            if (depth == 0) {
+                this.resetResolutionBudget();  // 顶层配方独立预算,材质解析不充值
+            }
             HashSet<Item> recipeVisitedItems;
             RecipeResolutionResult pathResult = this.tryRecipePath((Recipe<?>)recipe, requiredCount, availableItems, (Set<Item>)(recipeVisitedItems = new HashSet<Item>(visitedItems)), depth + 1);
             if (pathResult.isSuccess()) {
                 possiblePaths.add(pathResult);
-                continue;
+                break;  // 找到可行路径即返回,不再尝试可能指数爆炸的更复杂配方(如床染色)
             }
             failedPaths.add(pathResult);
         }
@@ -280,7 +313,7 @@ public class RecipeResolver {
 
     private RecipeResolutionResult resolveRecipeRecursive(Item targetItem, int requiredCount, Map<Item, Integer> availableItems, Set<Item> visitedItems, int depth) {
         LOGGER.debug("\u5f00\u59cb\u89e3\u6790\u7269\u54c1: {} x{}, \u6df1\u5ea6: {}, visitedItems: {}", new Object[]{targetItem.getDescriptionId(), requiredCount, depth, visitedItems.stream().map(Item::getDescriptionId).toList()});
-        if (depth > 8) {
+        if (depth > this.maxDepth) {
             LOGGER.debug("\u9012\u5f52\u6df1\u5ea6\u8fc7\u6df1 ({}), \u7ec8\u6b62\u89e3\u6790: {}", (Object)depth, (Object)targetItem.getDescriptionId());
             return RecipeResolutionResult.failure("\u9012\u5f52\u6df1\u5ea6\u8fc7\u6df1");
         }
@@ -359,6 +392,9 @@ public class RecipeResolver {
     }
 
     private RecipeResolutionResult tryRecipePath(Recipe<?> recipe, int requiredCount, Map<Item, Integer> availableItems, Set<Item> visitedItems, int depth) {
+        if (this.checkDeadline()) {
+            return RecipeResolutionResult.failure("合成解析超时");
+        }
         ItemStack result = recipe.getResultItem((HolderLookup.Provider)this.registryAccess);
         int recipeYield = result.getCount();
         int craftingTimes = (int)Math.ceil((double)requiredCount / (double)recipeYield);
@@ -589,8 +625,8 @@ public class RecipeResolver {
             }
         }
         availableFirst.addAll(rest);
-        if (availableFirst.size() > MAX_INGREDIENT_CANDIDATES) {
-            return new ArrayList<Item>(availableFirst.subList(0, MAX_INGREDIENT_CANDIDATES));
+        if (availableFirst.size() > this.maxIngredientCandidates) {
+            return new ArrayList<Item>(availableFirst.subList(0, this.maxIngredientCandidates));
         }
         return availableFirst;
     }
@@ -673,23 +709,38 @@ public class RecipeResolver {
     }
 
     private List<CraftingRecipe> getCraftingRecipesForItem(Item item) {
-        return this.craftingRecipeCache.computeIfAbsent(item, this::findCraftingRecipesForItem);
-    }
-
-    private List<CraftingRecipe> findCraftingRecipesForItem(Item item) {
         if (item == null || item == Items.AIR) {
             return Collections.emptyList();
         }
-        ArrayList<CraftingRecipe> recipes = new ArrayList<CraftingRecipe>();
-        this.recipeManager.getAllRecipesFor(RecipeType.CRAFTING).stream().map(holder -> (CraftingRecipe)holder.value()).filter(recipe -> recipe != null && recipe.getResultItem((HolderLookup.Provider)this.registryAccess).getItem() == item).filter(recipe -> recipe instanceof CraftingRecipe).map(recipe -> recipe).forEach(recipes::add);
-        return recipes;
+        return this.getCraftingByResult().getOrDefault(item, Collections.emptyList());
+    }
+
+    /** 按产物物品索引的工作台配方表:一次构建,查询 O(1),避免每次递归都全量扫配方导致节点代价过高。 */
+    private Map<Item, List<CraftingRecipe>> craftingByResult = null;
+
+    private Map<Item, List<CraftingRecipe>> getCraftingByResult() {
+        if (this.craftingByResult == null) {
+            HashMap<Item, List<CraftingRecipe>> index = new HashMap<Item, List<CraftingRecipe>>();
+            for (RecipeHolder<CraftingRecipe> holder : this.recipeManager.getAllRecipesFor(RecipeType.CRAFTING)) {
+                CraftingRecipe recipe = holder.value();
+                if (recipe == null) continue;
+                Item result = recipe.getResultItem((HolderLookup.Provider)this.registryAccess).getItem();
+                if (result == null || result == Items.AIR) continue;
+                index.computeIfAbsent(result, k -> new ArrayList<CraftingRecipe>()).add(recipe);
+            }
+            this.craftingByResult = index;
+        }
+        return this.craftingByResult;
     }
 
     private MissingInfo computeMissingRecursiveCraftingOnlyWithDepth(Item targetItem, int requiredCount, Map<Item, Integer> availableItems, Set<Item> visitedItems, int depth, int maxDepthLimit) {
         if (requiredCount <= 0) {
             return new MissingInfo(Collections.emptyMap(), depth);
         }
-        if (depth > 8) {
+        if (depth > this.maxDepth) {
+            return null;
+        }
+        if (depth == 0 && this.checkDeadline()) {
             return null;
         }
         if (this.checkTimeout()) {
@@ -729,6 +780,9 @@ public class RecipeResolver {
         MissingInfo bestInfo = null;
         Map<Item, Integer> bestAvailable = null;
         for (CraftingRecipe recipe : recipes) {
+            if (depth == 0) {
+                this.resetResolutionBudget();
+            }
             HashMap<Item, Integer> availableClone = new HashMap<Item, Integer>(availableItems);
             HashSet<Item> visitedClone = new HashSet<Item>(visitedItems);
             ItemStack result = recipe.getResultItem((HolderLookup.Provider)this.registryAccess);
@@ -741,6 +795,9 @@ public class RecipeResolver {
             if (bestInfo != null && !RecipeResolver.isMissingBetter(candidate.info.missing, bestInfo.missing)) continue;
             bestInfo = candidate.info;
             bestAvailable = candidate.available;
+            if (candidate.info.missing.isEmpty()) {
+                break;  // 已找到零缺失配方,不再尝试可能指数爆炸的后续配方(如床染色)
+            }
         }
         visitedItems.remove(targetItem);
         if (bestInfo == null) {
@@ -754,6 +811,9 @@ public class RecipeResolver {
     }
 
     private MissingCandidate computeBestMissingForGroups(List<IngredientGroup> groups, int groupIndex, int craftingTimes, Map<Item, Integer> availableItems, Set<Item> visitedItems, int depth, int maxDepthLimit, MissingInfo accumulated) {
+        if (this.checkTimeout()) {
+            return null;
+        }
         if (groupIndex >= groups.size()) {
             return new MissingCandidate(accumulated, new HashMap<Item, Integer>(availableItems));
         }
