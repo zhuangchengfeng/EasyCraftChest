@@ -1,0 +1,21 @@
+# ===== 构建产物与缓存 =====
+modbuild/build/
+modbuild/.gradle/
+modbuild/gradle-dist/
+modbuild/run/
+modbuild/*.log
+
+# ===== 二进制/jar(可自行按需手动 git add -f)=====
+*.jar
+cfr.jar
+
+# ===== 反编译原始参考(以 modbuild/src 为准)=====
+decompiled_src/
+
+# ===== IDE / 系统 =====
+.idea/
+*.iml
+modbuild/.idea/
+.claude/
+.DS_Store
+Thumbs.db

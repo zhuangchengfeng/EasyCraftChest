@@ -1,0 +1,20 @@
+{
+  "itemGroup.storageandoneclicksynthesis": "自定义存储",
+  "block.storageandoneclicksynthesis.custom_storage_block": "自定义存储方块",
+  "gui.storageandoneclicksynthesis.custom_storage": "自定义存储",
+  "gui.storageandoneclicksynthesis.item_manager": "物品管理器",
+  "gui.storageandoneclicksynthesis.open_item_manager": "合成",
+  "gui.storageandoneclicksynthesis.view_recipe": "查看配方",
+  "gui.storageandoneclicksynthesis.search": "搜索...",
+  "gui.storageandoneclicksynthesis.no_item_selected": "请先选择一个物品",
+  "gui.customstorage.recipe_view": "配方查看",
+
+  "storageandoneclicksynthesis.configuration.title": "自定义存储配置",
+  "storageandoneclicksynthesis.configuration.section.storageandoneclicksynthesis.common.toml": "自定义存储配置",
+  "storageandoneclicksynthesis.configuration.section.storageandoneclicksynthesis.common.toml.title": "自定义存储配置",
+  "storageandoneclicksynthesis.configuration.items": "物品列表",
+  "storageandoneclicksynthesis.configuration.logDirtBlock": "记录泥土方块",
+  "storageandoneclicksynthesis.configuration.magicNumberIntroduction": "魔法数字说明",
+  "storageandoneclicksynthesis.configuration.magicNumber": "魔法数字",
+  "tooltip.storageandoneclicksynthesis.storage_summary": "包含：%s 个物品，%s 种类型"
+}

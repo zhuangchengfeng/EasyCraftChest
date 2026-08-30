@@ -1,0 +1,6 @@
+{
+  "parent": "minecraft:block/cube_all",
+  "textures": {
+    "all": "storageandoneclicksynthesis:block/custom_storage_block"
+  }
+}

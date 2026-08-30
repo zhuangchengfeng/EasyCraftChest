@@ -1,0 +1,19 @@
+{
+  "itemGroup.storageandoneclicksynthesis": "Custom Storage",
+  "block.storageandoneclicksynthesis.custom_storage_block": "Custom Storage Block",
+  "gui.storageandoneclicksynthesis.custom_storage": "Custom Storage",
+  "gui.storageandoneclicksynthesis.item_manager": "Item Manager",
+  "gui.storageandoneclicksynthesis.open_item_manager": "Synthesis",
+  "gui.storageandoneclicksynthesis.view_recipe": "View Recipe",
+  "gui.storageandoneclicksynthesis.search": "Search...",
+  "gui.customstorage.recipe_view": "Recipe View",
+
+  "storageandoneclicksynthesis.configuration.title": "Custom Storage Configs",
+  "storageandoneclicksynthesis.configuration.section.storageandoneclicksynthesis.common.toml": "Custom Storage Configs",
+  "storageandoneclicksynthesis.configuration.section.storageandoneclicksynthesis.common.toml.title": "Custom Storage Configs",
+  "storageandoneclicksynthesis.configuration.items": "Item List",
+  "storageandoneclicksynthesis.configuration.logDirtBlock": "Log Dirt Block",
+  "storageandoneclicksynthesis.configuration.magicNumberIntroduction": "Magic Number Text",
+  "storageandoneclicksynthesis.configuration.magicNumber": "Magic Number",
+  "tooltip.storageandoneclicksynthesis.storage_summary": "Contains: %s items, %s types"
+}
