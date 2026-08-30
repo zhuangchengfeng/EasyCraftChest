@@ -77,7 +77,7 @@ public class RecipeView {
         this.resultIsError = !success;
         if (!success && missing != null && !missing.isEmpty()) {
             String targetName = this.targetItem == null || this.targetItem.isEmpty() ? "" : this.targetItem.getHoverName().getString();
-            this.resultLines.add("合成" + targetName + "缺少材料:");
+            this.resultLines.add(Component.translatable("gui.storageandoneclicksynthesis.missing_header", targetName).getString());
             for (Map.Entry<String, Long> e : missing.entrySet()) {
                 if (this.resultLines.size() >= 4) {
                     break;
@@ -169,7 +169,7 @@ public class RecipeView {
         this.panelX = px;
         this.panelY = py;
         int ry = py + 8 + 54 + 18;
-        this.synthesisCountField = new EditBox(font, px + 8, ry, 50, 16, Component.literal("次数"));
+        this.synthesisCountField = new EditBox(font, px + 8, ry, 50, 16, Component.translatable("gui.storageandoneclicksynthesis.count_field"));
         this.synthesisCountField.setValue("1");
         this.synthesisCountField.setMaxLength(3);
         this.synthesisCountField.setFilter(text -> {
@@ -184,7 +184,7 @@ public class RecipeView {
                 return false;
             }
         });
-        this.trySynthesisButton = Button.builder(Component.literal("合成"), b -> this.onTrySynthesis()).bounds(px + 62, ry, 60, 16).build();
+        this.trySynthesisButton = Button.builder(Component.translatable("gui.storageandoneclicksynthesis.synthesize"), b -> this.onTrySynthesis()).bounds(px + 62, ry, 60, 16).build();
         this.updateControls();
     }
 
@@ -214,7 +214,7 @@ public class RecipeView {
             this.clearResult();
         }
         if (!this.hasRecipes() || this.targetItem.isEmpty()) {
-            String hint = "点击右侧物品查看配方";
+            Component hint = Component.translatable("gui.storageandoneclicksynthesis.recipe_hint");
             int hx = px + (162 - font.width(hint)) / 2;
             graphics.drawString(font, hint, hx, py + 45, 0xFFFFFF);
             return;
@@ -420,7 +420,7 @@ public class RecipeView {
         try {
             if (!this.hasRecipes() || this.recipes.get(this.currentRecipeIndex).getType() != RecipeType.CRAFTING) {
                 if (Minecraft.getInstance().player != null) {
-                    Minecraft.getInstance().player.displayClientMessage(Component.literal("一键合成仅支持工作台合成;熔炉/高炉/锻造等配方只能查看"), true);
+                    Minecraft.getInstance().player.displayClientMessage(Component.translatable("message.synthesis.only_crafting"), true);
                 }
                 return;
             }

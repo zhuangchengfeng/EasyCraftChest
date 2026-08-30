@@ -850,6 +850,23 @@ public class RecipeResolver {
                 }
             }
         }
+        if (best == null) {
+            // 该组所有候选都失败/爆炸:退化为"直接短缺"估算并继续后续组,避免整组缺失计算被密集组拖垮
+            HashMap<Item, Integer> directMissing = new HashMap<Item, Integer>(accumulated.missing);
+            List<Item> candidates = this.orderedIngredientCandidates(group.ingredient, availableItems);
+            if (!candidates.isEmpty()) {
+                long have = 0L;
+                for (Item candidate : candidates) {
+                    have += (long)availableItems.getOrDefault(candidate, 0);
+                }
+                long stillNeed = Math.max(0L, (long)needed - have);
+                if (stillNeed > 0L) {
+                    directMissing.merge(candidates.get(0), (int)Math.min(stillNeed, (long)Integer.MAX_VALUE), Integer::sum);
+                }
+            }
+            MissingInfo directAccum = new MissingInfo(directMissing, Math.max(accumulated.maxDepth, depth));
+            return this.computeBestMissingForGroups(groups, groupIndex + 1, craftingTimes, availableItems, visitedItems, depth, maxDepthLimit, directAccum);
+        }
         return best;
     }
 
