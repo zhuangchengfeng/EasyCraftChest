@@ -53,6 +53,8 @@ public class RecipeView {
     private final List<String> resultLines = new ArrayList<String>();
     private boolean resultIsError = false;
     private long resultSetTime = 0L;
+    /** 最近查看过配方的物品历史(最多 3 个,新的在前)。 */
+    private final List<ItemStack> history = new ArrayList<ItemStack>();
 
     public RecipeView(BlockPos storagePos) {
         this.storagePos = storagePos;
@@ -66,9 +68,133 @@ public class RecipeView {
             this.targetItem = ItemStack.EMPTY;
         } else {
             this.targetItem = item.copy();
+            this.addToHistory(this.targetItem);
             this.findRecipes();
         }
         this.updateControls();
+    }
+
+    /** 把查看过配方的物品加入历史(去重、新的在前、最多 3 个)。 */
+    private void addToHistory(ItemStack item) {
+        if (item == null || item.isEmpty()) {
+            return;
+        }
+        String id = BuiltInRegistries.ITEM.getKey(item.getItem()).toString();
+        this.history.removeIf(h -> BuiltInRegistries.ITEM.getKey(h.getItem()).toString().equals(id));
+        this.history.add(0, item.copy());
+        while (this.history.size() > 6) {
+            this.history.remove(this.history.size() - 1);
+        }
+    }
+
+    public ItemStack getHistoryItem(int index) {
+        if (index >= 0 && index < this.history.size()) {
+            return this.history.get(index);
+        }
+        return ItemStack.EMPTY;
+    }
+
+    /** 导出历史(按序的注册表 ID 列表),用于保存到状态缓存。 */
+    public List<String> getHistoryIds() {
+        ArrayList<String> ids = new ArrayList<String>();
+        for (ItemStack h : this.history) {
+            if (h == null || h.isEmpty()) continue;
+            ids.add(BuiltInRegistries.ITEM.getKey(h.getItem()).toString());
+        }
+        return ids;
+    }
+
+    /** 从状态缓存恢复历史。 */
+    public void restoreHistory(List<String> ids) {
+        this.history.clear();
+        if (ids == null) {
+            return;
+        }
+        for (String id : ids) {
+            if (id == null || id.isEmpty()) continue;
+            Item item = BuiltInRegistries.ITEM.get(ResourceLocation.tryParse(id));
+            if (item == null || item == net.minecraft.world.item.Items.AIR) continue;
+            this.history.add(new ItemStack(item));
+            if (this.history.size() >= 6) {
+                break;
+            }
+        }
+    }
+
+    /** 命中右侧某个历史配方格,返回索引(0~5),未命中返回 -1。 */
+    public int getHistorySlotAt(double mouseX, double mouseY, int px, int py) {
+        for (int i = 0; i < this.history.size() && i < 6; i++) {
+            int sx = px + 116 + (i % 2) * 18;
+            int sy = py + 2 + (i / 2) * 17;
+            if (mouseX >= (double)sx && mouseX < (double)(sx + 16) && mouseY >= (double)sy && mouseY < (double)(sy + 16)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** 命中九宫格内的某个原料格,返回格索引(0~8),未命中返回 -1。 */
+    public int getIngredientSlotAt(double mouseX, double mouseY, int px, int py) {
+        if (!this.hasRecipes()) {
+            return -1;
+        }
+        int rx = px + 8;
+        int ry = py + 8;
+        if (mouseX >= (double)rx && mouseX < (double)(rx + 54) && mouseY >= (double)ry && mouseY < (double)(ry + 54)) {
+            int col = (int)((mouseX - (double)rx) / 18.0);
+            int row = (int)((mouseY - (double)ry) / 18.0);
+            return row * 3 + col;
+        }
+        return -1;
+    }
+
+    /** 取九宫格某个原料格代表物品(该原料候选的第一个),便于点击查看其配方。 */
+    public ItemStack getIngredientItem(int slotIndex) {
+        if (slotIndex < 0 || slotIndex >= 9 || !this.hasRecipes()) {
+            return ItemStack.EMPTY;
+        }
+        Recipe<?> current = this.recipes.get(this.currentRecipeIndex);
+        if (!(current instanceof CraftingRecipe)) {
+            return ItemStack.EMPTY;
+        }
+        NonNullList<Ingredient> ingredients = ((CraftingRecipe)current).getIngredients();
+        if (slotIndex >= ingredients.size()) {
+            return ItemStack.EMPTY;
+        }
+        Ingredient ingredient = ingredients.get(slotIndex);
+        if (ingredient == null || ingredient.isEmpty()) {
+            return ItemStack.EMPTY;
+        }
+        ItemStack[] stacks = ingredient.getItems();
+        if (stacks == null || stacks.length == 0) {
+            return ItemStack.EMPTY;
+        }
+        return stacks[0].copy();
+    }
+
+    /** 命中结果栏(箭头右侧的成品格),返回 0 或 -1。 */
+    public int getResultSlotIndex(double mouseX, double mouseY, int px, int py) {
+        if (!this.hasRecipes()) {
+            return -1;
+        }
+        int rx = px + 94;
+        int ry = py + 26;
+        if (mouseX >= (double)rx && mouseX < (double)(rx + 16) && mouseY >= (double)ry && mouseY < (double)(ry + 16)) {
+            return 0;
+        }
+        return -1;
+    }
+
+    /** 当前配方的成品物品。 */
+    public ItemStack getResultItem() {
+        if (!this.hasRecipes()) {
+            return ItemStack.EMPTY;
+        }
+        Recipe<?> current = this.recipes.get(this.currentRecipeIndex);
+        if (current == null) {
+            return ItemStack.EMPTY;
+        }
+        return current.getResultItem((HolderLookup.Provider)Minecraft.getInstance().level.registryAccess()).copy();
     }
 
     /** 显示合成结果:成功则清空;失败则在配方栏内显示缺失材料或错误信息。 */
@@ -88,7 +214,8 @@ public class RecipeView {
                 this.resultLines.add(name + " x" + e.getValue());
             }
         } else if (message != null && !message.isEmpty()) {
-            this.resultLines.add(message);
+            // 若是 lang 键则翻译(如合成成功),否则原样显示
+            this.resultLines.add(Component.translatable(message).getString());
         }
         this.resultSetTime = System.currentTimeMillis();
     }
@@ -168,8 +295,8 @@ public class RecipeView {
     public void createControls(Font font, int px, int py) {
         this.panelX = px;
         this.panelY = py;
-        int ry = py + 8 + 54 + 18;
-        this.synthesisCountField = new EditBox(font, px + 8, ry, 50, 16, Component.translatable("gui.storageandoneclicksynthesis.count_field"));
+        int ry = py + 8 + 54 + 10;
+        this.synthesisCountField = new EditBox(font, px + 8, ry, 36, 16, Component.translatable("gui.storageandoneclicksynthesis.count_field"));
         this.synthesisCountField.setValue("1");
         this.synthesisCountField.setMaxLength(3);
         this.synthesisCountField.setFilter(text -> {
@@ -184,7 +311,7 @@ public class RecipeView {
                 return false;
             }
         });
-        this.trySynthesisButton = Button.builder(Component.translatable("gui.storageandoneclicksynthesis.synthesize"), b -> this.onTrySynthesis()).bounds(px + 62, ry, 60, 16).build();
+        this.trySynthesisButton = Button.builder(Component.translatable("gui.storageandoneclicksynthesis.synthesize"), b -> this.onTrySynthesis()).bounds(px + 66, ry, 56, 16).build();
         this.updateControls();
     }
 
@@ -212,6 +339,16 @@ public class RecipeView {
         // 合成成功/失败提示 3 秒后自动复原为配方显示
         if (!this.resultLines.isEmpty() && this.resultSetTime > 0L && System.currentTimeMillis() - this.resultSetTime > 3000L) {
             this.clearResult();
+        }
+        // 右侧 6 个历史配方格(2列×3行,始终显示,点击可重新查看配方)
+        for (int i = 0; i < 6; i++) {
+            int sx = px + 116 + (i % 2) * 18;
+            int sy = py + 2 + (i / 2) * 17;
+            if (i < this.history.size()) {
+                this.renderHistorySlot(graphics, sx, sy, this.history.get(i), mouseX, mouseY);
+            } else {
+                this.renderEmptyHistorySlot(graphics, sx, sy);
+            }
         }
         if (!this.hasRecipes() || this.targetItem.isEmpty()) {
             Component hint = Component.translatable("gui.storageandoneclicksynthesis.recipe_hint");
@@ -244,7 +381,8 @@ public class RecipeView {
         }
         String idx = String.format("%d/%d", this.currentRecipeIndex + 1, this.recipes.size());
         int idxWidth = font.width(idx);
-        graphics.drawString(font, idx, px + (162 - idxWidth) / 2, py + 72, 0xFFFFFF);
+        // 页码位于数量输入框与合成按钮之间
+        graphics.drawString(font, idx, px + 55 - idxWidth / 2, py + 80, 0xFFFFFF);
         if (!this.hoveredStack.isEmpty()) {
             graphics.renderTooltip(font, this.hoveredStack, mouseX, mouseY);
         }
@@ -262,7 +400,7 @@ public class RecipeView {
         }
         this.renderArrow(graphics, font, x + 60, y + 18);
         ItemStack result = recipe.getResultItem((HolderLookup.Provider)Minecraft.getInstance().level.registryAccess());
-        this.renderSlot(graphics, font, x + 90, y + 18, result, mouseX, mouseY);
+        this.renderSlot(graphics, font, x + 86, y + 18, result, mouseX, mouseY);
     }
 
     private void renderCookingRecipe(GuiGraphics graphics, Font font, AbstractCookingRecipe recipe, int x, int y, int mouseX, int mouseY) {
@@ -370,6 +508,29 @@ public class RecipeView {
         graphics.fill(x + 16, y, x + 17, y + 17, -1);
         graphics.fill(x, y + 16, x + 17, y + 17, -1);
         graphics.fill(x, y, x + 16, y + 16, -6250336);
+    }
+
+    private void renderHistorySlot(GuiGraphics graphics, int x, int y, ItemStack stack, int mouseX, int mouseY) {
+        graphics.fill(x, y, x + 16, y + 16, -8749702);
+        this.drawHistoryBorder(graphics, x, y);
+        if (mouseX >= x && mouseX < x + 16 && mouseY >= y && mouseY < y + 16) {
+            graphics.fill(x + 1, y + 1, x + 15, y + 15, -2130706433);
+        }
+        if (!stack.isEmpty()) {
+            graphics.renderItem(stack, x, y);
+        }
+    }
+
+    private void renderEmptyHistorySlot(GuiGraphics graphics, int x, int y) {
+        graphics.fill(x, y, x + 16, y + 16, -6250336);
+        this.drawHistoryBorder(graphics, x, y);
+    }
+
+    private void drawHistoryBorder(GuiGraphics graphics, int x, int y) {
+        graphics.fill(x - 1, y - 1, x + 17, y, -11184811);
+        graphics.fill(x - 1, y - 1, x, y + 17, -11184811);
+        graphics.fill(x + 16, y, x + 17, y + 17, -1);
+        graphics.fill(x, y + 16, x + 17, y + 17, -1);
     }
 
     private void renderArrow(GuiGraphics graphics, Font font, int x, int y) {

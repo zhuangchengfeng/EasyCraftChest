@@ -1,5 +1,5 @@
 {
-  "itemGroup.storageandoneclicksynthesis": "自定义存储",
+  "itemGroup.storageandoneclicksynthesis": "自动合成",
   "block.storageandoneclicksynthesis.custom_storage_block": "自定义存储方块",
   "gui.storageandoneclicksynthesis.custom_storage": "自定义存储",
   "gui.storageandoneclicksynthesis.item_manager": "物品管理器",
@@ -28,6 +28,8 @@
   "message.synthesis.only_crafting": "一键合成仅支持工作台合成；熔炉/高炉/锻造等配方只能查看",
   "message.synthesis.path": "路径%s：",
   "message.synthesis.missing_item": "%s x%s",
+  "key.storageandoneclicksynthesis.pin": "置顶/取消置顶物品",
+  "key.categories.storageandoneclicksynthesis": "存储与一键合成",
 
   "storageandoneclicksynthesis.configuration.title": "自定义存储配置",
   "storageandoneclicksynthesis.configuration.section.storageandoneclicksynthesis.common.toml": "自定义存储配置",

@@ -273,7 +273,7 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
             storageManager.setDirty();
             int producedCount = steps.get(steps.size() - 1).getOutputCount();
             TrySynthesisPacket.sendPlayerMessage(serverPlayer, Component.translatable("message.synthesis.success").append(this.targetItem.getHoverName()).append(Component.literal(" x" + producedCount)));
-            this.sendSynthesisResult(serverPlayer, true, "合成成功", null);
+            this.sendSynthesisResult(serverPlayer, true, "message.synthesis.success", null);
             LOGGER.debug("一键合成完成，已同步数据到客户端并标记为需要保存");
         }
         catch (Exception e) {

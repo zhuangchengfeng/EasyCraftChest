@@ -1,5 +1,5 @@
 {
-  "itemGroup.storageandoneclicksynthesis": "Custom Storage",
+  "itemGroup.storageandoneclicksynthesis": "Automatic Crafting",
   "block.storageandoneclicksynthesis.custom_storage_block": "Custom Storage Block",
   "gui.storageandoneclicksynthesis.custom_storage": "Custom Storage",
   "gui.storageandoneclicksynthesis.item_manager": "Item Manager",
@@ -27,6 +27,8 @@
   "message.synthesis.only_crafting": "One-click synthesis only supports crafting table recipes; furnace/blast/smithing recipes can only be viewed",
   "message.synthesis.path": "Path %s: ",
   "message.synthesis.missing_item": "%s x%s",
+  "key.storageandoneclicksynthesis.pin": "Pin/Unpin Item",
+  "key.categories.storageandoneclicksynthesis": "Storage & Auto-Crafting",
 
   "storageandoneclicksynthesis.configuration.title": "Custom Storage Configs",
   "storageandoneclicksynthesis.configuration.section.storageandoneclicksynthesis.common.toml": "Custom Storage Configs",

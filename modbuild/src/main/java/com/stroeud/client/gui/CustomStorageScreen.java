@@ -1,6 +1,7 @@
 package com.stroeud.client.gui;
 
 import com.mojang.logging.LogUtils;
+import com.stroeud.client.ModKeyBindings;
 import com.stroeud.container.CustomStorageContainer;
 import com.stroeud.network.NetworkManager;
 import com.stroeud.network.StorageNetworkHandler;
@@ -163,6 +164,7 @@ extends AbstractContainerScreen<CustomStorageContainer> {
                 }
             }
             this.recipeView.setSynthesisCount(saved.synthesisCount);
+            this.recipeView.restoreHistory(saved.historyItemIds);
         }
         this.recipeView.getSynthesisCountField().setResponder(text -> this.saveState());
         this.addRenderableWidget(this.recipeView.getTrySynthesisButton());
@@ -193,8 +195,8 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         graphics.fill(this.leftPos, this.topPos, this.leftPos + 354, this.topPos + 260, -6250336);
         this.drawBorder(graphics, this.leftPos, this.topPos, 354, 260, -13158601);
         // 右下角合成面板:独立子区域,亮色底 + 边框,四周留出可见边距(不贴到主界面边缘)
-        graphics.fill(this.leftPos + 184, this.topPos + 152, this.leftPos + 342, this.topPos + 252, -6710887);
-        this.drawBorder(graphics, this.leftPos + 184, this.topPos + 152, 158, 100, -13158601);
+        graphics.fill(this.leftPos + 184, this.topPos + 152, this.leftPos + 342, this.topPos + 256, -6710887);
+        this.drawBorder(graphics, this.leftPos + 184, this.topPos + 152, 158, 104, -13158601);
         graphics.drawString(this.font, this.title, this.leftPos + 8, this.topPos + 6, 0x404040, false);
         this.renderStorageGrid(graphics, mouseX, mouseY);
         this.renderCatalogGrid(graphics, mouseX, mouseY);
@@ -266,10 +268,11 @@ extends AbstractContainerScreen<CustomStorageContainer> {
     }
 
     private void renderCatalogSlot(GuiGraphics graphics, int x, int y, ItemStack stack, int mouseX, int mouseY) {
-        // 合成过的物品用金色边框标记,与未合成过的区分
-        boolean synthesized = !stack.isEmpty() && SynthesisStats.getCount(stack.getItem()) > 0;
+        // 置顶物品用亮蓝色边框,合成过的用金色边框,其余默认
+        boolean pinned = !stack.isEmpty() && SynthesisStats.isPinned(stack.getItem());
+        boolean synthesized = !pinned && !stack.isEmpty() && SynthesisStats.getCount(stack.getItem()) > 0;
         graphics.fill(x, y, x + 16, y + 16, -8749702);
-        this.drawBorder(graphics, x, y, 16, 16, synthesized ? -2643968 : -11184811);
+        this.drawBorder(graphics, x, y, 16, 16, pinned ? -16722433 : (synthesized ? -2643968 : -11184811));
         if (mouseX >= x && mouseX < x + 16 && mouseY >= y && mouseY < y + 16) {
             graphics.fill(x + 1, y + 1, x + 15, y + 15, -2130706433);
         }
@@ -404,10 +407,81 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         if (textFocused && this.minecraft != null && this.minecraft.options.keyInventory.matches(keyCode, scanCode)) {
             return true;
         }
+        if (!textFocused && ModKeyBindings.PIN_ITEM.matches(keyCode, scanCode)) {
+            this.togglePinAtMouse();
+            return true;
+        }
         return super.keyPressed(keyCode, scanCode, modifiers);
     }
 
+    /** 悬停在任意物品上按置顶键:置顶/取消置顶该物品(目录、存储、九宫格原料、结果、历史均可)。 */
+    private void togglePinAtMouse() {
+        ItemStack item = this.getItemUnderMouseForPin();
+        if (!item.isEmpty()) {
+            SynthesisStats.togglePin(item.getItem());
+            this.applyCatalogFilter();
+            this.updatePageButtons();
+        }
+    }
+
+    /** 按优先级取鼠标下方可置顶的物品:目录 → 历史 → 九宫格原料 → 结果栏 → 存储栏。 */
+    private ItemStack getItemUnderMouseForPin() {
+        int mouseX = this.lastMouseX;
+        int mouseY = this.lastMouseY;
+        // 右上合成目录
+        int catalogIndex = this.getCatalogSlotAt(mouseX, mouseY);
+        if (catalogIndex >= 0 && catalogIndex < this.catalogFilteredItems.size()) {
+            return this.catalogFilteredItems.get(catalogIndex);
+        }
+        int px = this.leftPos + 184;
+        int py = this.topPos + 152;
+        // 右下配方面板-历史栏
+        int historyIndex = this.recipeView.getHistorySlotAt(mouseX, mouseY, px, py);
+        if (historyIndex >= 0) {
+            ItemStack hist = this.recipeView.getHistoryItem(historyIndex);
+            if (!hist.isEmpty()) {
+                return hist;
+            }
+        }
+        // 右下配方面板-九宫格原料
+        int ingredientSlot = this.recipeView.getIngredientSlotAt(mouseX, mouseY, px, py);
+        if (ingredientSlot >= 0) {
+            ItemStack ing = this.recipeView.getIngredientItem(ingredientSlot);
+            if (!ing.isEmpty()) {
+                return ing;
+            }
+        }
+        // 右下配方面板-结果栏
+        int resultSlot = this.recipeView.getResultSlotIndex(mouseX, mouseY, px, py);
+        if (resultSlot >= 0) {
+            ItemStack result = this.recipeView.getResultItem();
+            if (!result.isEmpty()) {
+                return result;
+            }
+        }
+        // 左上存储栏
+        int storageSlot = this.getStorageSlotAt(mouseX, mouseY);
+        if (storageSlot >= 0) {
+            List<Map.Entry<String, Long>> pageItems = this.getCurrentPageItems();
+            if (storageSlot < pageItems.size()) {
+                return this.getCachedItemStack(pageItems.get(storageSlot).getKey());
+            }
+        }
+        return ItemStack.EMPTY;
+    }
+
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        // 点击输入框以外区域时,取消输入框聚焦(否则后续按键会被输入框吞掉,A 键置顶失效)
+        boolean onSearchBox = this.searchBox != null && this.searchBox.isMouseOver(mouseX, mouseY);
+        boolean onCountField = this.recipeView.getSynthesisCountField() != null && this.recipeView.getSynthesisCountField().isMouseOver(mouseX, mouseY);
+        if (!onSearchBox && !onCountField) {
+            if (this.searchBox != null) {
+                this.searchBox.setFocused(false);
+            }
+            if (this.recipeView.getSynthesisCountField() != null) {
+                this.recipeView.getSynthesisCountField().setFocused(false);
+            }
+        }
         if (this.searchBox.isMouseOver(mouseX, mouseY)) {
             return super.mouseClicked(mouseX, mouseY, button);
         }
@@ -421,6 +495,28 @@ extends AbstractContainerScreen<CustomStorageContainer> {
                 this.recipeView.setTarget(this.catalogFilteredItems.get(catalogIndex));
                 this.recipeView.quickSynthesize();
                 this.saveState();
+            }
+            return true;
+        }
+        int historyIndex = this.recipeView.getHistorySlotAt(mouseX, mouseY, this.leftPos + 184, this.topPos + 152);
+        if (historyIndex >= 0) {
+            if (button == 0) {
+                ItemStack hist = this.recipeView.getHistoryItem(historyIndex);
+                if (!hist.isEmpty()) {
+                    this.recipeView.setTarget(hist);
+                    this.saveState();
+                }
+            }
+            return true;
+        }
+        int ingredientSlot = this.recipeView.getIngredientSlotAt(mouseX, mouseY, this.leftPos + 184, this.topPos + 152);
+        if (ingredientSlot >= 0) {
+            if (button == 0) {
+                ItemStack ing = this.recipeView.getIngredientItem(ingredientSlot);
+                if (!ing.isEmpty()) {
+                    this.recipeView.setTarget(ing);
+                    this.saveState();
+                }
             }
             return true;
         }
@@ -622,12 +718,18 @@ extends AbstractContainerScreen<CustomStorageContainer> {
             if (!ItemCatalog.matchesSearchFilter(stack, this.searchFilter)) continue;
             this.catalogFilteredItems.add(stack);
         }
-        // 按历史合成次数降序排序:常合成的物品置顶在最前,其余按名称
+        // 置顶物品在前(按置顶先后顺序),未置顶按名称
         this.catalogFilteredItems.sort((a, b) -> {
-            int ca = SynthesisStats.getCount(a.getItem());
-            int cb = SynthesisStats.getCount(b.getItem());
-            if (ca != cb) {
-                return Integer.compare(cb, ca);
+            int pa = SynthesisStats.getPinIndex(BuiltInRegistries.ITEM.getKey(a.getItem()).toString());
+            int pb = SynthesisStats.getPinIndex(BuiltInRegistries.ITEM.getKey(b.getItem()).toString());
+            if (pa >= 0 && pb >= 0) {
+                return Integer.compare(pa, pb);
+            }
+            if (pa >= 0) {
+                return -1;
+            }
+            if (pb >= 0) {
+                return 1;
             }
             return a.getHoverName().getString().compareToIgnoreCase(b.getHoverName().getString());
         });
@@ -859,6 +961,7 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         state.catalogPage = this.catalogPage;
         state.synthesisCount = this.recipeView.getSynthesisCount();
         state.lastTargetItemId = this.recipeView.getTargetItemId();
+        state.historyItemIds = this.recipeView.getHistoryIds();
     }
 
     private static final class StoredState {
@@ -867,5 +970,6 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         int catalogPage = 0;
         String synthesisCount = "1";
         String lastTargetItemId = "";
+        List<String> historyItemIds = new ArrayList<String>();
     }
 }

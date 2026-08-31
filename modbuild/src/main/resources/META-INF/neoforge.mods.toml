@@ -24,10 +24,10 @@ license="All Rights Reserved"
 modId="storageandoneclicksynthesis" #mandatory
 
 # The version number of the mod
-version="1.0.2" #mandatory
+version="1.0.3" #mandatory
 
 # A display name for the mod
-displayName="Storage and one-click synthesis" #mandatory
+displayName="Automatic Crafting" #mandatory
 
 # A URL to query for updates for this mod. See the JSON update specification https://docs.neoforged.net/docs/misc/updatechecker/
 #updateJSONURL="https://change.me.example.invalid/updates.json" #optional
@@ -45,8 +45,12 @@ displayName="Storage and one-click synthesis" #mandatory
 authors="YourNameHere, OtherNameHere" #optional
 
 # The description text for the mod (multi line!) (#mandatory)
-description='''Example mod description.
-Newline characters can be used and will be replaced properly.'''
+description='''A one-stop storage block with fast item management, in-GUI recipe viewing, and one-click multi-level auto-crafting from stored materials.
+- Virtual unlimited storage in a single block
+- Instant search with Pinyin support
+- Recipe history, pin-to-top (A key), and quick right-click synthesis
+- Optimized, freeze-proof recipe resolution (node budget + timeout)
+English and Chinese built in.'''
 
 # The [[mixins]] block allows you to declare your mixin config to FML so that it gets loaded.
 [[mixins]]
