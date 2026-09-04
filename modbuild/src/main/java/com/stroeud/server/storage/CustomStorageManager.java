@@ -389,8 +389,8 @@ extends SavedData {
     }
 
     private void handleSyncRequestOperation(ServerPlayer player, CustomStorageData storage, StorageNetworkHandler.ItemOperationPacket packet) {
-        LOGGER.info("handleSyncRequestOperation() \u5f00\u59cb: \u73a9\u5bb6={}", (Object)player.getName().getString());
-        LOGGER.info("\u5ba2\u6237\u7aef\u8bf7\u6c42\u9875\u7801={}, \u5ba2\u6237\u7aef\u641c\u7d22\u8fc7\u6ee4\u5668='{}'", (Object)packet.getTargetPage(), (Object)packet.getSearchFilter());
+        LOGGER.debug("handleSyncRequestOperation() \u5f00\u59cb: \u73a9\u5bb6={}", (Object)player.getName().getString());
+        LOGGER.debug("\u5ba2\u6237\u7aef\u8bf7\u6c42\u9875\u7801={}, \u5ba2\u6237\u7aef\u641c\u7d22\u8fc7\u6ee4\u5668='{}'", (Object)packet.getTargetPage(), (Object)packet.getSearchFilter());
         this.sendStorageDataToPlayer(player, storage, packet.getTargetPage(), packet.getSearchFilter());
         this.sendPlayerInventoryToClient(player);
     }
@@ -564,7 +564,7 @@ extends SavedData {
         CustomStorageData storage;
         UUID playerId = player.getUUID();
         BlockPos storagePos = this.playerOpenStorage.get(playerId);
-        LOGGER.info("forceSync() \u8c03\u7528: \u73a9\u5bb6={}", (Object)player.getName().getString());
+        LOGGER.debug("forceSync() \u8c03\u7528: \u73a9\u5bb6={}", (Object)player.getName().getString());
         if (storagePos != null && (storage = this.storageMap.get(storagePos)) != null) {
             this.cachePlayerInventory(player);
             int currentPage = this.playerLastPage.getOrDefault(playerId, 0);

@@ -120,6 +120,10 @@ extends AbstractContainerScreen<CustomStorageContainer> {
     private final RecipeView recipeView;
     private int syncTicker = 0;
     private final Map<String, ItemStack> itemStackCache = new HashMap<String, ItemStack>();
+    /** tag 原料浏览状态:记录"上次点击的是九宫格第几格 + 轮换到该 tag 第几个成员",
+        使多成员标签原料(如任意色床)点击后逐次浏览不同成员,而不是永远固定第一个(如红床)。 */
+    private int lastTagIngredientSlot = -1;
+    private int tagIngredientOffset = 0;
     private int lastMouseX = -1;
     private int lastMouseY = -1;
     private boolean tooltipCacheValid = false;
@@ -488,10 +492,12 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         int catalogIndex = this.getCatalogSlotAt((int)mouseX, (int)mouseY);
         if (catalogIndex >= 0) {
             if (button == 0) {
+                this.lastTagIngredientSlot = -1;
                 this.recipeView.setTarget(this.catalogFilteredItems.get(catalogIndex));
                 this.saveState();
             } else if (button == 1) {
                 // 右键快捷合成:按输入框次数直接合成
+                this.lastTagIngredientSlot = -1;
                 this.recipeView.setTarget(this.catalogFilteredItems.get(catalogIndex));
                 this.recipeView.quickSynthesize();
                 this.saveState();
@@ -503,6 +509,7 @@ extends AbstractContainerScreen<CustomStorageContainer> {
             if (button == 0) {
                 ItemStack hist = this.recipeView.getHistoryItem(historyIndex);
                 if (!hist.isEmpty()) {
+                    this.lastTagIngredientSlot = -1;
                     this.recipeView.setTarget(hist);
                     this.saveState();
                 }
@@ -512,7 +519,9 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         int ingredientSlot = this.recipeView.getIngredientSlotAt(mouseX, mouseY, this.leftPos + 184, this.topPos + 152);
         if (ingredientSlot >= 0) {
             if (button == 0) {
-                ItemStack ing = this.recipeView.getIngredientItem(ingredientSlot);
+                // 多成员标签原料(如"任意色床"):记录该格的 tag,每次点击轮换浏览不同成员,
+                // 仓库里已有的颜色排最前(贴近实际能合成的),而不是永远固定第一个成员(如红床)。
+                ItemStack ing = this.cycleTagIngredient(ingredientSlot, this.recipeView.getIngredientOptions(ingredientSlot));
                 if (!ing.isEmpty()) {
                     this.recipeView.setTarget(ing);
                     this.saveState();
@@ -535,6 +544,66 @@ extends AbstractContainerScreen<CustomStorageContainer> {
             return;
         }
         super.slotClicked(slot, slotId, mouseButton, clickType);
+    }
+
+    /** 点击九宫格原料格查看配方的入口:单成员原料直接用该成员;
+        多成员(标签/选择列表)则"记住该格是 tag",每次点击轮换浏览下一个成员,
+        库存里已有的颜色排最前(更贴近实际能合成的),避免永远固定第一个成员(如红床)。
+        若没轮到库存成员,点几下也能看到你要的那个颜色的配方。 */
+    private ItemStack cycleTagIngredient(int slotIndex, List<ItemStack> options) {
+        if (options == null || options.isEmpty()) {
+            return ItemStack.EMPTY;
+        }
+        if (options.size() == 1) {
+            return options.get(0);
+        }
+        if (slotIndex != this.lastTagIngredientSlot) {
+            this.lastTagIngredientSlot = slotIndex;
+            this.tagIngredientOffset = 0;
+        } else {
+            ++this.tagIngredientOffset;
+        }
+        ArrayList<ItemStack> ordered = new ArrayList<ItemStack>(options);
+        ordered.sort((a, b) -> Integer.compare(this.optionStockRank(a), this.optionStockRank(b)));
+        return ordered.get(this.tagIngredientOffset % ordered.size());
+    }
+
+    /** 该原料成员若在仓库有货 → 0(排最前),否则 → 1;排序稳定,余下维持配方顺序。 */
+    private int optionStockRank(ItemStack s) {
+        if (s == null || s.isEmpty() || this.itemStackCache == null || this.itemStackCache.isEmpty()) {
+            return 1;
+        }
+        String base = BuiltInRegistries.ITEM.getKey(s.getItem()).toString();
+        for (String key : this.itemStackCache.keySet()) {
+            String kb = this.stripCacheKeySuffix(key);
+            if (kb.equals(base)) {
+                return 0;
+            }
+            // 同"颜色前缀"家族也算可支持:仓库有 minecraft:white_wool / white_bed / white_dye 时,
+            // 点"任意色床"tag 会优先落到白色床,而不是永远红床(与仓库实际能合成的一致)。
+            int lastUnderscore = base.lastIndexOf('_');
+            int colon = base.indexOf(':');
+            if (lastUnderscore > colon) {
+                String colorPrefix = base.substring(0, lastUnderscore);
+                if (kb.startsWith(colorPrefix + "_")) {
+                    return 0;
+                }
+            }
+        }
+        return 1;
+    }
+
+    /** 存储条目键去掉 #NBT / @NBT 后缀,还原成基础注册 id。 */
+    private String stripCacheKeySuffix(String key) {
+        if (key == null) {
+            return "";
+        }
+        String k = key;
+        int hash = k.indexOf('#');
+        int at = k.indexOf('@');
+        if (hash >= 0) k = k.substring(0, hash);
+        if (at >= 0) k = k.substring(0, at);
+        return k;
     }
 
     private void handleStorageClick(int slotIndex, int button) {

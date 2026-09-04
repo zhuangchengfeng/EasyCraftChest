@@ -21,8 +21,9 @@ public final class ModConfigs {
             "配方解析的节点预算上限(每个顶层配方独立)。",
             "解析时每个递归步骤/候选都会计数,超过上限立即中止该配方并跳到下一个。",
             "防止密集配方图(如染色)指数爆炸导致卡死,且不连累后续可成功的配方。",
-            "默认 1000。正常配方解析通常几十~几百个节点,若你的整合包很大可适当调大。")
-        .defineInRange("maxResolutionNodes", 1000, 100, 100000);
+            "自 1.0.3 起标签组已做'代表成员+递归封顶',合法深链不再轻易打满预算,故默认放宽到 8000。",
+            "正常配方解析通常几十~几百个节点,若你的整合包很大可适当调大。")
+        .defineInRange("maxResolutionNodes", 8000, 100, 100000);
 
     public static final ModConfigSpec.IntValue MAX_INGREDIENT_CANDIDATES = BUILDER
         .comment(
@@ -34,9 +35,10 @@ public final class ModConfigs {
     public static final ModConfigSpec.IntValue MAX_SYNTHESIS_DEPTH = BUILDER
         .comment(
             "合成链的最大递归深度。",
-            "正常配方链(如 原木→木板→木棍→梯子)通常 3~5 层,默认 8 已很宽裕。",
-            "调小可进一步降低最坏情况搜索量。")
-        .defineInRange("maxSynthesisDepth", 8, 2, 20);
+            "自 1.0.3 起配方解析按'标签聚拢 + 单一代表合成',深度开销大减,故默认放宽到 16。",
+            "正常配方链(如 原木→木板→木棍→梯子)通常 3~6 层;嵌套成品(如 prefab 的高级房子链)可达 10+ 层。",
+            "若仍报'递归深度过深'可继续调大;若出现卡顿/超时可适当调小。")
+        .defineInRange("maxSynthesisDepth", 16, 2, 32);
 
     public static final ModConfigSpec SPEC = BUILDER.build();
 

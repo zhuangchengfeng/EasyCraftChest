@@ -37,6 +37,7 @@ import com.stroeud.server.recipe.RecipeResolver;
 import com.stroeud.server.storage.CustomStorageManager;
 import com.stroeud.storage.CustomStorageData;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -162,7 +163,7 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
                     // \u5bfc\u81f4\u89e3\u6790\u62ff\u4e0d\u5230\u914d\u65b9\u800c\u8bef\u62a5\u5931\u8d25\u3002\u9632\u5361\u6b7b\u5df2\u7531\u5019\u9009\u4e0a\u9650/\u6df1\u5ea6/\u8282\u70b9\u9884\u7b97\u4fdd\u8bc1\u3002
                     recipeResolver.setDeadline(System.currentTimeMillis() + (long)ModConfigs.SYNTHESIS_TIMEOUT_MILLIS.get());
                     ResolutionOutcome outcome = TrySynthesisPacket.resolveOutcome(recipeResolver, this.targetItem.copy(), this.synthesisCount, availableForPlanning);
-                    this.applyOutcome(serverPlayer, storageManager, storageData, outcome, recipeResolver);
+                    this.applyOutcome(serverPlayer, storageManager, storageData, outcome, recipeResolver, availableItems);
                 }
                 catch (Exception e) {
                     LOGGER.error("\u5904\u7406\u5408\u6210\u8bf7\u6c42\u65f6\u53d1\u751f\u9519\u8bef: " + e.getMessage(), (Throwable)e);
@@ -173,18 +174,36 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
 
     private static ResolutionOutcome resolveOutcome(RecipeResolver resolver, ItemStack targetStack, int count, Map<Item, Integer> availableForPlanning) {
         try {
-            List<Map<Item, Integer>> missing = resolver.computeMissingAlternativesForCraftingOnly(targetStack.getItem(), count, availableForPlanning, 3);
-            if (resolver.isTimedOut()) {
-                return new ResolutionOutcome(null, RecipeResolutionResult.failure("合成解析超时"));
-            }
-            if (missing != null && !missing.isEmpty()) {
-                return new ResolutionOutcome(missing, null);
-            }
+            // 直接先尝试真实合成:解析器按"可行代表优先"找路径,通常只要几十~几百个节点。
+            // 以前先跑全量缺料预检(computeMissingAlternatives)来挑选展示用路径,复杂配方
+            // (house 这类内嵌 tag/多配方中间件)会把节点预算耗尽、误回退成"缺目标本身",
+            // 导致明明能合却提示缺。所以把"先合成"提到最前。
             resolver.resetResolutionBudget();
             RecipeResolutionResult result = resolver.resolveRecipeCraftingOnly(targetStack, count, availableForPlanning);
-            LOGGER.info("合成解析完成,目标: {}, 消耗节点数: {}", targetStack.getHoverName().getString(), resolver.getResolutionNodes());
-            if (resolver.isTimedOut()) {
+            LOGGER.info("合成解析完成,目标: {}, 消耗节点数: {}, 结果: {}", targetStack.getHoverName().getString(), resolver.getResolutionNodes(), result == null ? "null" : (result.isSuccess() ? "成功" : "失败"));
+            if (result == null) {
+                return new ResolutionOutcome(null, RecipeResolutionResult.failure("合成解析异常"));
+            }
+            if (result.isSuccess()) {
+                return new ResolutionOutcome(null, result);
+            }
+            boolean timedOut = resolver.isTimedOut() || (result.getErrorMessage() != null && result.getErrorMessage().contains("超时"));
+            if (timedOut) {
                 return new ResolutionOutcome(null, RecipeResolutionResult.failure("合成解析超时"));
+            }
+            // 合成失败且没超时 = 真的缺材料。用"正向链缺料估算"给出真正的基础物缺料:
+            // 石头不足 → 缺 石头;没羊毛做床 → 稳定缺 线/白羊毛,而不是 玫瑰丛/染料 来回变。
+            // 该估算只在合成失败时运行(预算封顶),成功路径不受影响。
+            Map<Item, Integer> leaves = resolver.computeBaseShortage(targetStack.getItem(), count, availableForPlanning);
+            if (leaves != null && !leaves.isEmpty()) {
+                LOGGER.info("正向链缺料估算: {}", TrySynthesisPacket.missingToString(leaves));
+                return new ResolutionOutcome(null, RecipeResolutionResult.failure("缺少材料", leaves));
+            }
+            LOGGER.info("正向链缺料估算为空(预算不足?), 退回合成缺失: {}", TrySynthesisPacket.missingToString(TrySynthesisPacket.resultMissing(result)));
+            // 估算超预算时,退回合成失败自身携带的缺失作为提示。
+            Map<Item, Integer> miss = result.getMissingMaterials();
+            if (miss == null || miss.isEmpty()) {
+                miss = result.getTotalConsumption();
             }
             return new ResolutionOutcome(null, result);
         }
@@ -194,14 +213,22 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
         }
     }
 
-    private void applyOutcome(ServerPlayer serverPlayer, CustomStorageManager storageManager, CustomStorageData storageData, ResolutionOutcome outcome, RecipeResolver recipeResolver) {
+    private void applyOutcome(ServerPlayer serverPlayer, CustomStorageManager storageManager, CustomStorageData storageData, ResolutionOutcome outcome, RecipeResolver recipeResolver, Map<Item, Integer> availableItems) {
         try {
             if (outcome == null) {
                 return;
             }
             if (recipeResolver.isTimedOut() || (outcome.result != null && outcome.result.getErrorMessage() != null && outcome.result.getErrorMessage().contains("超时"))) {
-                TrySynthesisPacket.sendPlayerMessage(serverPlayer, Component.translatable("message.synthesis.timeout"));
-                this.sendSynthesisResult(serverPlayer, false, "合成解析超时", null);
+                // 超时时别让玩家看到空白:用一次不递归的直接缺口估算给出"缺什么"。
+                // 若估算也为空(说明原料充足、纯属链条过深),才提示超时请减量/重试。
+                Map<Item, Integer> fallbackMissing = recipeResolver.estimateTopLevelMissing(this.targetItem.getItem(), this.synthesisCount, availableItems);
+                if (fallbackMissing != null && !fallbackMissing.isEmpty()) {
+                    TrySynthesisPacket.sendPlayerMessage(serverPlayer, TrySynthesisPacket.formatMissingMessage(Component.translatable("message.synthesis.fail_missing"), fallbackMissing));
+                    this.sendSynthesisResult(serverPlayer, false, "缺少材料", fallbackMissing);
+                } else {
+                    TrySynthesisPacket.sendPlayerMessage(serverPlayer, Component.translatable("message.synthesis.timeout"));
+                    this.sendSynthesisResult(serverPlayer, false, "合成解析超时", null);
+                }
                 return;
             }
             if (outcome.missing != null && !outcome.missing.isEmpty()) {
@@ -413,6 +440,38 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
             first = false;
         }
         return msg;
+    }
+
+    /** 从失败结果里取出缺失映射(优先 missingMaterials,否则 totalConsumption)。 */
+    private static Map<Item, Integer> resultMissing(RecipeResolutionResult result) {
+        if (result == null) {
+            return Collections.emptyMap();
+        }
+        Map<Item, Integer> miss = result.getMissingMaterials();
+        if (miss == null || miss.isEmpty()) {
+            miss = result.getTotalConsumption();
+        }
+        return miss == null ? Collections.emptyMap() : miss;
+    }
+
+    /** 把缺失映射转成简短可读文本(最多列 6 项),用于诊断日志。 */
+    private static String missingToString(Map<Item, Integer> missing) {
+        if (missing == null || missing.isEmpty()) {
+            return "(空)";
+        }
+        StringBuilder sb = new StringBuilder();
+        int shown = 0;
+        for (Map.Entry<Item, Integer> e : missing.entrySet()) {
+            if (e.getKey() == null || e.getValue() == null || e.getValue() <= 0) continue;
+            if (shown >= 6) {
+                sb.append(", …");
+                break;
+            }
+            if (shown > 0) sb.append(", ");
+            sb.append(e.getKey().getDescriptionId()).append(" x").append(e.getValue());
+            ++shown;
+        }
+        return sb.toString();
     }
 
     private static boolean keyMatchesBaseItem(String storedKey, String baseItemId) {

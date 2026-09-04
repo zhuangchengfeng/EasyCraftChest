@@ -37,6 +37,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -72,6 +73,11 @@ public class RecipeResolver {
     private final int maxResolutionNodes;
     private final int maxIngredientCandidates;
     private final int maxDepth;
+    /** 单个原料组中,允许"需要真正合成"的成员递归尝试次数上限。
+        库存能直接覆盖的成员不计入且不递归(瞬间返回),所以 #wool/#beds 这类十几色标签
+        最多只深搜前几个最可能成功的成员,其余直接进缺料兜底,把"每层×成员数"的指数爆炸
+        压成"每层×常数"。 */
+    private static final int MAX_EXPENSIVE_GROUP_ATTEMPTS = 5;
     private final Level level;
     private final RecipeManager recipeManager;
     private final RegistryAccess registryAccess;
@@ -144,6 +150,7 @@ public class RecipeResolver {
             return Collections.emptyList();
         }
         int limit = Math.max(1, maxPaths);
+        this.resetResolutionBudget();
         MissingInfo full = this.computeMissingInfoCraftingOnly(targetItem, requiredCount, availableItems, -1);
         if (full.missing.isEmpty()) {
             return Collections.emptyList();
@@ -151,6 +158,9 @@ public class RecipeResolver {
         int baseDepth = Math.max(0, full.maxDepth);
         ArrayList<Map<Item, Integer>> alternatives = new ArrayList<Map<Item, Integer>>();
         for (int i = 0; i < limit && (depthLimit = baseDepth - i) >= 0; ++i) {
+            // 每次不同深度上限的探测都是独立查询:清空上一次可能已耗尽的预算/超时标记,
+            // 否则一次爆炸把 timedOut 置位后,后面所有探测与真实合成都会被直接判超时。
+            this.resetResolutionBudget();
             MissingInfo limited = this.computeMissingInfoCraftingOnly(targetItem, requiredCount, availableItems, depthLimit);
             if (limited.missing.isEmpty()) continue;
             if (!RecipeResolver.containsMissing(alternatives, limited.missing)) {
@@ -218,6 +228,15 @@ public class RecipeResolver {
             return RecipeResolutionResult.failure("\u5408\u6210\u89e3\u6790\u8d85\u65f6");
         }
         if (visitedItems.contains(targetItem)) {
+            // \u56de\u5230\u7956\u5148 = \u53cd\u5411\u4f9d\u8d56(\u5982"\u4e3a\u89e3\u538b\u800c\u9020\u66f4\u5bc6\u7269\u54c1\u3001\u53c8\u56de\u5230\u81ea\u8eab")\u3002
+            // \u82e5\u8be5\u7269\u54c1\u672c\u8eab\u6ca1\u6709\u6b63\u5411\u5236\u9020\u8def\u7ebf(\u77f3\u5934/\u91d1\u952d/\u91d1\u7c92\u8fd9\u7c7b\u53f6\u5b50),\u8bf4\u660e\u5b83\u53ea\u80fd\u9760\u5e93\u5b58\u6216\u66f4\u9ad8\u4e00\u7ea7\u89e3\u538b\u800c\u6765,
+            // \u5e93\u5b58\u53c8\u4e0d\u591f \u2192 \u5982\u5b9e\u8bb0\u4e3a\u7f3a\u53e3(\u8fd9\u624d\u662f"\u7f3a\u77f3\u5934"\u800c\u975e"\u7f3a\u4e09\u500d\u538b\u7f29\u77f3\u5934"\u7684\u6765\u6e90);
+            // \u82e5\u5b83\u6709\u6b63\u5411\u5236\u9020\u8def\u7ebf(\u5982\u6b63\u5728\u9020\u7684\u538b\u7f29\u77f3),\u8fd9\u6761\u53ea\u662f\u88ab\u6392\u9664\u7684\u53cd\u5411\u66ff\u4ee3,\u8fd4\u56de\u7a7a\u5373\u53ef\u3002
+            if (!this.hasForwardCrafting(targetItem)) {
+                HashMap<Item, Integer> leaf = new HashMap<Item, Integer>();
+                leaf.put(targetItem, Math.max(1, requiredCount));
+                return RecipeResolutionResult.failure("\u7f3a\u5c11\u57fa\u7840\u6750\u6599", leaf);
+            }
             return RecipeResolutionResult.failure("\u5b58\u5728\u5faa\u73af\u4f9d\u8d56");
         }
         if (depth > 0) {
@@ -407,7 +426,8 @@ public class RecipeResolver {
                 return RecipeResolutionResult.failure("\u65e0\u6cd5\u89e3\u6790\u914d\u65b9\u6750\u6599\uff08\u4e0d\u652f\u6301\u7684\u914d\u65b9\u7c7b\u578b/\u52a8\u6001\u914d\u65b9\uff09");
             }
         }
-        Item[] chosen = new Item[groups.size()];
+        @SuppressWarnings("unchecked")
+        Map<Item, Integer>[] chosen = new Map[groups.size()];
         ArrayList<RecipeResolutionResult> failures = new ArrayList<RecipeResolutionResult>();
         RecipeResolutionResult success = this.tryResolveIngredientGroups(recipe, recipeYield, craftingTimes, availableItems, visitedItems, depth, groups, 0, chosen, new ArrayList<CraftingStep>(), new HashMap<Item, Integer>(), failures);
         if (success != null) {
@@ -444,49 +464,97 @@ public class RecipeResolver {
         return RecipeResolutionResult.failure("\u7f3a\u5c11\u6750\u6599", missing);
     }
 
-    private RecipeResolutionResult tryResolveIngredientGroups(Recipe<?> recipe, int recipeYield, int craftingTimes, Map<Item, Integer> availableItems, Set<Item> visitedItems, int depth, List<IngredientGroup> groups, int groupIndex, Item[] chosen, List<CraftingStep> stepsAccum, Map<Item, Integer> consumptionAccum, List<RecipeResolutionResult> failures) {
+    private RecipeResolutionResult tryResolveIngredientGroups(Recipe<?> recipe, int recipeYield, int craftingTimes, Map<Item, Integer> availableItems, Set<Item> visitedItems, int depth, List<IngredientGroup> groups, int groupIndex, Map<Item, Integer>[] chosen, List<CraftingStep> stepsAccum, Map<Item, Integer> consumptionAccum, List<RecipeResolutionResult> failures) {
         if (groupIndex >= groups.size()) {
             return this.buildFinalStep(recipe, recipeYield, craftingTimes, groups, chosen, stepsAccum, consumptionAccum);
         }
         IngredientGroup group = groups.get(groupIndex);
         int needed = group.slotCount * craftingTimes;
-        for (Item candidate : this.orderedIngredientCandidates(group.ingredient, availableItems)) {
+        Map<Item, Integer> avail = availableItems == null ? Collections.emptyMap() : availableItems;
+        List<Item> candidates = this.orderedIngredientCandidates(group.ingredient, avail);
+        // 1) 标签/选择列表组是"可互换等价类":先把组内所有成员库存聚拢起来扣,
+        //    扣掉的部分从可用池移除,避免同一份库存既被当直接消耗、又被当合成原料重复计算。
+        HashMap<Item, Integer> stockUse = new HashMap<Item, Integer>();
+        HashMap<Item, Integer> remainingAvail = new HashMap<Item, Integer>(avail);
+        int remaining = needed;
+        for (Item candidate : candidates) {
+            if (remaining <= 0) break;
+            int have = avail.getOrDefault(candidate, 0);
+            if (have <= 0) continue;
+            int take = Math.min(have, remaining);
+            stockUse.merge(candidate, take, Integer::sum);
+            remaining -= take;
+            int left = have - take;
+            if (left <= 0) {
+                remainingAvail.remove(candidate);
+            } else {
+                remainingAvail.put(candidate, left);
+            }
+        }
+        if (remaining <= 0) {
+            // 整组由库存满足:零合成,直接计入基础消耗并继续下一组
+            HashMap<Item, Integer> consumption = new HashMap<Item, Integer>(consumptionAccum);
+            for (Map.Entry<Item, Integer> e : stockUse.entrySet()) {
+                consumption.merge(e.getKey(), e.getValue(), Integer::sum);
+            }
+            HashMap<Item, Integer> chosenThis = new HashMap<Item, Integer>(stockUse);
+            chosen[groupIndex] = chosenThis;
+            return this.tryResolveIngredientGroups(recipe, recipeYield, craftingTimes, remainingAvail, visitedItems, depth, groups, groupIndex + 1, chosen, stepsAccum, consumption, failures);
+        }
+        // 2) 还差 remaining 个需真正合成:候选按"库存多→最省可造→不可造"排序逐个试(封顶),
+        //    第一个能合成的代表成员即满足整组(颜色按你仓库里有的羊毛/半成品来选)。
+        int expensiveAttempts = 0;
+        for (Item rep : candidates) {
             if (this.checkTimeout()) {
                 return null;
             }
-            if (visitedItems.contains(candidate)) {
+            if (visitedItems.contains(rep)) {
                 continue;
             }
+            boolean coversByStock = avail.getOrDefault(rep, 0) >= needed;
+            if (!coversByStock && ++expensiveAttempts > RecipeResolver.MAX_EXPENSIVE_GROUP_ATTEMPTS) {
+                break;
+            }
             HashSet<Item> materialVisited = new HashSet<Item>(visitedItems);
-            RecipeResolutionResult materialResult = this.resolveRecipeRecursiveCraftingOnly(candidate, needed, availableItems, materialVisited, depth + 1);
-            if (materialResult.isSuccess()) {
-                ArrayList<CraftingStep> steps = new ArrayList<CraftingStep>(stepsAccum);
-                steps.addAll(materialResult.getCraftingSteps());
-                HashMap<Item, Integer> consumption = new HashMap<Item, Integer>(consumptionAccum);
-                for (Map.Entry<Item, Integer> e : materialResult.getTotalConsumption().entrySet()) {
-                    consumption.merge(e.getKey(), e.getValue(), Integer::sum);
+            RecipeResolutionResult produced = this.resolveRecipeRecursiveCraftingOnly(rep, remaining, remainingAvail, materialVisited, depth + 1);
+            if (produced == null || !produced.isSuccess()) {
+                if (produced != null) {
+                    failures.add(produced);
                 }
-                chosen[groupIndex] = candidate;
-                RecipeResolutionResult deeper = this.tryResolveIngredientGroups(recipe, recipeYield, craftingTimes, availableItems, visitedItems, depth, groups, groupIndex + 1, chosen, steps, consumption, failures);
-                if (deeper != null && deeper.isSuccess()) {
-                    return deeper;
-                }
-                if (deeper != null) {
-                    failures.add(deeper);
-                }
-            } else {
-                failures.add(materialResult);
+                continue;
+            }
+            ArrayList<CraftingStep> steps = new ArrayList<CraftingStep>(stepsAccum);
+            steps.addAll(produced.getCraftingSteps());
+            HashMap<Item, Integer> consumption = new HashMap<Item, Integer>(consumptionAccum);
+            for (Map.Entry<Item, Integer> e : produced.getTotalConsumption().entrySet()) {
+                consumption.merge(e.getKey(), e.getValue(), Integer::sum);
+            }
+            for (Map.Entry<Item, Integer> e : stockUse.entrySet()) {
+                consumption.merge(e.getKey(), e.getValue(), Integer::sum);
+            }
+            HashMap<Item, Integer> chosenThis = new HashMap<Item, Integer>(stockUse);
+            chosenThis.merge(rep, remaining, Integer::sum);
+            chosen[groupIndex] = chosenThis;
+            RecipeResolutionResult deeper = this.tryResolveIngredientGroups(recipe, recipeYield, craftingTimes, remainingAvail, visitedItems, depth, groups, groupIndex + 1, chosen, steps, consumption, failures);
+            if (deeper != null && deeper.isSuccess()) {
+                return deeper;
+            }
+            if (deeper != null) {
+                failures.add(deeper);
             }
         }
         return null;
     }
 
-    private RecipeResolutionResult buildFinalStep(Recipe<?> recipe, int recipeYield, int craftingTimes, List<IngredientGroup> groups, Item[] chosen, List<CraftingStep> steps, Map<Item, Integer> consumption) {
+    private RecipeResolutionResult buildFinalStep(Recipe<?> recipe, int recipeYield, int craftingTimes, List<IngredientGroup> groups, Map<Item, Integer>[] chosen, List<CraftingStep> steps, Map<Item, Integer> consumption) {
         HashMap<Item, Integer> requiredMaterials = new HashMap<Item, Integer>();
         for (int i = 0; i < groups.size(); ++i) {
-            Item chosenItem = chosen[i];
-            if (chosenItem == null || chosenItem == Items.AIR) continue;
-            requiredMaterials.merge(chosenItem, groups.get(i).slotCount * craftingTimes, Integer::sum);
+            Map<Item, Integer> m = chosen[i];
+            if (m == null) continue;
+            for (Map.Entry<Item, Integer> e : m.entrySet()) {
+                if (e.getKey() == null || e.getKey() == Items.AIR || e.getValue() == null || e.getValue() <= 0) continue;
+                requiredMaterials.merge(e.getKey(), e.getValue(), Integer::sum);
+            }
         }
         ItemStack outputPrototype = recipe.getResultItem((HolderLookup.Provider)this.registryAccess).copy();
         outputPrototype.setCount(1);
@@ -612,23 +680,127 @@ public class RecipeResolver {
         return String.join(",", ids);
     }
 
+    /** 某原料组的候选物品,按"越可能快速满足"排序:
+        ① 仓库有货的成员(库存多者优先,尽量少去合成);
+        ② 没有库存但能造出来的成员(取它"最省的配方"的一级原料缺口,越小越靠前);
+        ③ 完全造不出来的成员垫底(它们只会报缺料,深搜也白费)。
+        不改变"选哪个成员都满足该组"的语义,只是让最可能成功/最省的先被尝试,
+        从而大幅减少因反复试错失败成员而消耗的递归节点。 */
     private List<Item> orderedIngredientCandidates(Ingredient ingredient, Map<Item, Integer> availableItems) {
-        ArrayList<Item> availableFirst = new ArrayList<Item>();
-        ArrayList<Item> rest = new ArrayList<Item>();
+        LinkedHashSet<Item> withStock = new LinkedHashSet<Item>();
+        LinkedHashSet<Item> noStock = new LinkedHashSet<Item>();
         for (ItemStack stack : ingredient.getItems()) {
             if (stack == null || stack.isEmpty()) continue;
             Item item = stack.getItem();
             if (item == null || item == Items.AIR) continue;
-            List<Item> target = availableItems != null && availableItems.getOrDefault(item, 0) > 0 ? availableFirst : rest;
-            if (!target.contains(item)) {
-                target.add(item);
+            (availableItems != null && availableItems.getOrDefault(item, 0) > 0 ? withStock : noStock).add(item);
+        }
+        ArrayList<Item> ordered = new ArrayList<Item>();
+        ArrayList<Item> stockList = new ArrayList<Item>(withStock);
+        stockList.sort(Comparator.comparingInt((Item i) -> availableItems == null ? 0 : availableItems.getOrDefault(i, 0)).reversed());
+        ordered.addAll(stockList);
+        HashSet<Item> family = new HashSet<Item>(withStock);
+        family.addAll(noStock);
+        ArrayList<Item> craftable = new ArrayList<Item>();
+        ArrayList<Item> uncraftable = new ArrayList<Item>();
+        for (Item item : noStock) {
+            if (this.getCraftingRecipesForItem(item).isEmpty()) {
+                uncraftable.add(item);
+            } else {
+                craftable.add(item);
             }
         }
-        availableFirst.addAll(rest);
-        if (availableFirst.size() > this.maxIngredientCandidates) {
-            return new ArrayList<Item>(availableFirst.subList(0, this.maxIngredientCandidates));
+        // 族内"头羊"优先:有"完全不需要其它同族成员"的配方(白羊毛=4线)排最前,
+        // 再按一级缺口。这样没羊毛时首选取白羊毛(→线),而不是彩色羊毛(→还要染料/墨囊)。
+        craftable.sort((a, b) -> {
+            int ra = this.isFamilyRoot(a, family) ? 0 : 1;
+            int rb = this.isFamilyRoot(b, family) ? 0 : 1;
+            if (ra != rb) {
+                return Integer.compare(ra, rb);
+            }
+            return Integer.compare(this.oneLevelShortfall(a, 1, availableItems), this.oneLevelShortfall(b, 1, availableItems));
+        });
+        ordered.addAll(craftable);
+        ordered.addAll(uncraftable);
+        if (ordered.size() > this.maxIngredientCandidates) {
+            return new ArrayList<Item>(ordered.subList(0, this.maxIngredientCandidates));
         }
-        return availableFirst;
+        return ordered;
+    }
+
+    /** 族内"头羊"判定:item 是否存在一个配方,其原料完全不需要本族其它成员。
+        (#minecraft:wool 里,白羊毛"4 线→白羊毛"不需要任何羊毛 → 头羊;彩色羊毛配方需白羊毛 → 不是。)
+        头羊优先作为该族的默认制造选择,报缺料也会先落到它的基础物(线),而非彩色染料的来源。 */
+    private boolean isFamilyRoot(Item item, Set<Item> family) {
+        if (item == null || item == Items.AIR || family == null || family.isEmpty()) {
+            return false;
+        }
+        List<CraftingRecipe> recipes = this.getCraftingRecipesForItem(item);
+        if (recipes.isEmpty()) {
+            return false;
+        }
+        for (CraftingRecipe recipe : recipes) {
+            boolean needsFamily = false;
+            for (IngredientGroup g : this.buildIngredientGroups(recipe)) {
+                for (ItemStack ms : g.ingredient.getItems()) {
+                    Item m = ms == null ? null : ms.getItem();
+                    if (m == null || m == Items.AIR || m == item) continue;
+                    if (family.contains(m)) {
+                        needsFamily = true;
+                        break;
+                    }
+                }
+                if (needsFamily) {
+                    break;
+                }
+            }
+            if (!needsFamily) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 完全不深搜地估算"用现成库存造 need 个该物品"的省事程度(取该物品最省的配方)。
+        排序键 = 还缺几种原料组 × 1_000_000 + 总缺口。
+        先比"缺几种组"是关键:例如白床的羊毛格仓库有货 → 该组不缺,键立刻比其他床小。
+        若只比总缺口,染色配方(染剂+另一张床)会让 16 色床缺口全部相等,
+        稳定排序就永远先试红床(没红羊毛必失败),造成"只有红毛能合"的假象。
+        只用于候选排序启发,不递归;无工作台配方返回 Integer.MAX_VALUE。 */
+    private int oneLevelShortfall(Item item, int need, Map<Item, Integer> availableItems) {
+        List<CraftingRecipe> recipes = this.getCraftingRecipesForItem(item);
+        if (recipes.isEmpty()) {
+            return Integer.MAX_VALUE;
+        }
+        int best = Integer.MAX_VALUE;
+        Map<Item, Integer> avail = availableItems == null ? Collections.emptyMap() : availableItems;
+        for (CraftingRecipe recipe : recipes) {
+            ItemStack result = recipe.getResultItem((HolderLookup.Provider)this.registryAccess);
+            if (result == null || result.isEmpty()) continue;
+            int yield = Math.max(1, result.getCount());
+            int times = (int)Math.ceil((double)need / (double)yield);
+            int shortGroups = 0;
+            long shortfall = 0L;
+            for (IngredientGroup g : this.buildIngredientGroups(recipe)) {
+                int gNeed = g.slotCount * times;
+                long have = 0L;
+                for (ItemStack s : g.ingredient.getItems()) {
+                    Item m = s == null ? null : s.getItem();
+                    if (m != null && m != Items.AIR) {
+                        have += (long)avail.getOrDefault(m, 0);
+                    }
+                }
+                if (have < (long)gNeed) {
+                    ++shortGroups;
+                    shortfall += (long)gNeed - have;
+                }
+            }
+            int key = (int)Math.min((long)Integer.MAX_VALUE, (long)shortGroups * 1000000L + shortfall);
+            if (key < best) {
+                best = key;
+            }
+        }
+        return best;
     }
 
     private Map<Item, Integer> getRequiredMaterials(Recipe<?> recipe, int craftingTimes, Map<Item, Integer> availableItems) {
@@ -708,6 +880,8 @@ public class RecipeResolver {
         return this.recipeCache.computeIfAbsent(item, this::findRecipesForItem);
     }
 
+    /** 某物品可用来"制造"它的工作台配方(含正/反向;反向=解压,用于从库存里已有更密物品取更细物品,
+        如 金块→金锭→金粒。循环依赖由解析器的 visited 检测兜住,见 resolveRecipeRecursiveCraftingOnly)。 */
     private List<CraftingRecipe> getCraftingRecipesForItem(Item item) {
         if (item == null || item == Items.AIR) {
             return Collections.emptyList();
@@ -731,6 +905,77 @@ public class RecipeResolver {
             this.craftingByResult = index;
         }
         return this.craftingByResult;
+    }
+
+    /** 只含"正向(制造)"配方的结果索引:解压/反向配方(把高阶物品拆回低阶,如压缩石→9 石头)不算制造配方。
+        这样"造压缩石头"只会走压缩方向,不会因解压配方产生"造石头→要压缩石→又要石头"的循环,
+        也才能把真正缺的基础物(石头)正确上报。 */
+    private Map<Item, List<CraftingRecipe>> forwardCraftingByResult = null;
+
+    private final Set<CraftingRecipe> reverseRecipeCache = new HashSet<CraftingRecipe>();
+
+    private Map<Item, List<CraftingRecipe>> getForwardCraftingByResult() {
+        if (this.forwardCraftingByResult == null) {
+            HashMap<Item, List<CraftingRecipe>> fwd = new HashMap<Item, List<CraftingRecipe>>();
+            for (Map.Entry<Item, List<CraftingRecipe>> e : this.getCraftingByResult().entrySet()) {
+                for (CraftingRecipe recipe : e.getValue()) {
+                    if (this.isReverseCompressRecipe(recipe)) continue;
+                    fwd.computeIfAbsent(e.getKey(), k -> new ArrayList<CraftingRecipe>()).add(recipe);
+                }
+            }
+            this.forwardCraftingByResult = fwd;
+        }
+        return this.forwardCraftingByResult;
+    }
+
+    /** 该物品是否存在"正向(压缩/合成)"制造路线(不含解压)。正向路线为空的物品(=叶子)通常
+        靠解压更高一级获得(如石头、金锭、金粒):库存里没有它且又不足以合成时,它就是真正的缺口。 */
+    private boolean hasForwardCrafting(Item item) {
+        if (item == null || item == Items.AIR) {
+            return false;
+        }
+        return !this.getForwardCraftingByResult().getOrDefault(item, Collections.emptyList()).isEmpty();
+    }
+
+    /** 该配方是否是"反向/解压":即存在原料成员 m 比产物 out 更高一级 —— m 有一条把 ≥2 个 out 压成 1 个 m 的配方。
+        (压缩石 out=石头 时,m=压缩石,压缩石有"9 石头→1 压缩石" ⇒ 判定为反向。) */
+    private boolean isReverseCompressRecipe(CraftingRecipe recipe) {
+        if (this.reverseRecipeCache.contains(recipe)) {
+            return true;
+        }
+        ItemStack outStack = recipe.getResultItem((HolderLookup.Provider)this.registryAccess);
+        if (outStack == null || outStack.isEmpty()) {
+            return false;
+        }
+        Item out = outStack.getItem();
+        for (IngredientGroup g : this.buildIngredientGroups(recipe)) {
+            for (ItemStack ms : g.ingredient.getItems()) {
+                Item m = ms == null ? null : ms.getItem();
+                if (m == null || m == Items.AIR || m == out) continue;
+                List<CraftingRecipe> mRecipes = this.getCraftingByResult().getOrDefault(m, Collections.emptyList());
+                for (CraftingRecipe mr : mRecipes) {
+                    if (this.pilesUp(mr, out)) {
+                        this.reverseRecipeCache.add(recipe);
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /** mr 是否"把 ≥2 个 target 堆成一个 mr 的产物"(即压缩方向)。 */
+    private boolean pilesUp(CraftingRecipe mr, Item target) {
+        for (IngredientGroup g : this.buildIngredientGroups(mr)) {
+            if (g.slotCount < 2) continue;
+            for (ItemStack ms : g.ingredient.getItems()) {
+                Item m = ms == null ? null : ms.getItem();
+                if (m == target) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private MissingInfo computeMissingRecursiveCraftingOnlyWithDepth(Item targetItem, int requiredCount, Map<Item, Integer> availableItems, Set<Item> visitedItems, int depth, int maxDepthLimit) {
@@ -768,6 +1013,13 @@ public class RecipeResolver {
             return new MissingInfo(missing, depth);
         }
         if (visitedItems.contains(targetItem)) {
+            // 与合成路径一致的叶子判定:无正向制造路线的基础物在循环处如实记为缺口,
+            // 否则(可正向制造)只是反向替代,返回 null 交给上层其它路径。
+            if (!this.hasForwardCrafting(targetItem)) {
+                HashMap<Item, Integer> leaf = new HashMap<Item, Integer>();
+                leaf.put(targetItem, requiredCount);
+                return new MissingInfo(leaf, depth);
+            }
             return null;
         }
         List<CraftingRecipe> recipes = this.getCraftingRecipesForItem(targetItem);
@@ -801,6 +1053,11 @@ public class RecipeResolver {
         }
         visitedItems.remove(targetItem);
         if (bestInfo == null) {
+            if (this.isTimedOut()) {
+                LOGGER.debug("缺料深挖被预算截断: {} x{} (已耗节点 {})", targetItem.getDescriptionId(), requiredCount, this.resolutionNodes);
+            } else {
+                LOGGER.debug("缺料深挖找不到可行配方: {} x{}", targetItem.getDescriptionId(), requiredCount);
+            }
             return null;
         }
         if (bestAvailable != null) {
@@ -819,20 +1076,64 @@ public class RecipeResolver {
         }
         IngredientGroup group = groups.get(groupIndex);
         int needed = group.slotCount * craftingTimes;
+        Map<Item, Integer> avail = availableItems == null ? Collections.emptyMap() : availableItems;
+        List<Item> candidates = this.orderedIngredientCandidates(group.ingredient, avail);
+        // 缺料同合成路径:标签/选择列表是"可互换等价类",先把组内所有成员库存聚拢,
+        // 总量够 → 本组不缺;不够的部分只需挑一个"可行色"去深挖真正缺什么,而非枚举每种颜色。
+        HashMap<Item, Integer> stockUse = new HashMap<Item, Integer>();
+        HashMap<Item, Integer> remainingAvail = new HashMap<Item, Integer>(avail);
+        int remaining = needed;
+        for (Item candidate : candidates) {
+            if (remaining <= 0) break;
+            int have = avail.getOrDefault(candidate, 0);
+            if (have <= 0) continue;
+            int take = Math.min(have, remaining);
+            stockUse.merge(candidate, take, Integer::sum);
+            remaining -= take;
+            int left = have - take;
+            if (left <= 0) {
+                remainingAvail.remove(candidate);
+            } else {
+                remainingAvail.put(candidate, left);
+            }
+        }
+        if (remaining <= 0) {
+            // 本组库存足够 → 无缺失;把扣掉本组消耗后的可用池继续带下去
+            return this.computeBestMissingForGroups(groups, groupIndex + 1, craftingTimes, remainingAvail, visitedItems, depth, maxDepthLimit, accumulated);
+        }
+        int shortfall = remaining;
+        if (candidates.size() > 1) {
+            StringBuilder order = new StringBuilder();
+            int show = Math.min(8, candidates.size());
+            for (int ci = 0; ci < show; ++ci) {
+                if (ci > 0) order.append(", ");
+                order.append(candidates.get(ci).getDescriptionId());
+            }
+            if (candidates.size() > show) {
+                order.append(", …共").append(candidates.size()).append("种");
+            }
+            LOGGER.debug("[缺料选代表] 组缺口 {} 个, 候选顺序: {}", shortfall, order);
+        }
         MissingCandidate best = null;
-        for (Item candidate : this.orderedIngredientCandidates(group.ingredient, availableItems)) {
+        int expensiveAttempts = 0;
+        for (Item rep : candidates) {
             if (this.checkTimeout()) {
                 return null;
             }
-            if (visitedItems.contains(candidate)) {
+            if (visitedItems.contains(rep)) {
                 continue;
             }
-            HashMap<Item, Integer> snapshot = new HashMap<Item, Integer>(availableItems);
+            boolean coversByStock = avail.getOrDefault(rep, 0) >= needed;
+            if (!coversByStock && ++expensiveAttempts > RecipeResolver.MAX_EXPENSIVE_GROUP_ATTEMPTS) {
+                LOGGER.debug("[缺料选代表] 达到单组尝试上限 {},停止枚举该组其余成员", RecipeResolver.MAX_EXPENSIVE_GROUP_ATTEMPTS);
+                break;
+            }
+            HashMap<Item, Integer> snapshot = new HashMap<Item, Integer>(remainingAvail);
             HashSet<Item> visitedClone = new HashSet<Item>(visitedItems);
-            MissingInfo part = this.computeMissingRecursiveCraftingOnlyWithDepth(candidate, needed, availableItems, visitedClone, depth + 1, maxDepthLimit);
+            MissingInfo part = this.computeMissingRecursiveCraftingOnlyWithDepth(rep, shortfall, remainingAvail, visitedClone, depth + 1, maxDepthLimit);
             if (part == null) {
-                availableItems.clear();
-                availableItems.putAll(snapshot);
+                remainingAvail.clear();
+                remainingAvail.putAll(snapshot);
                 continue;
             }
             HashMap<Item, Integer> mergedMissing = new HashMap<Item, Integer>(accumulated.missing);
@@ -840,9 +1141,9 @@ public class RecipeResolver {
                 mergedMissing.merge(e.getKey(), e.getValue(), Integer::sum);
             }
             MissingInfo newAccum = new MissingInfo(mergedMissing, Math.max(accumulated.maxDepth, part.maxDepth));
-            MissingCandidate deeper = this.computeBestMissingForGroups(groups, groupIndex + 1, craftingTimes, availableItems, visitedClone, depth, maxDepthLimit, newAccum);
-            availableItems.clear();
-            availableItems.putAll(snapshot);
+            MissingCandidate deeper = this.computeBestMissingForGroups(groups, groupIndex + 1, craftingTimes, remainingAvail, visitedClone, depth, maxDepthLimit, newAccum);
+            remainingAvail.clear();
+            remainingAvail.putAll(snapshot);
             if (deeper != null && (best == null || RecipeResolver.isMissingBetter(deeper.info.missing, best.info.missing))) {
                 best = deeper;
                 if (best.info.missing.isEmpty()) {
@@ -851,21 +1152,25 @@ public class RecipeResolver {
             }
         }
         if (best == null) {
-            // 该组所有候选都失败/爆炸:退化为"直接短缺"估算并继续后续组,避免整组缺失计算被密集组拖垮
+            // 深挖失败(超预算/死循环):用"组缺口"估算并继续后续组;缺口名挂"库存最多"的成员,
+            // 使提示贴近真实(如你有白床就报缺白床数量),而不是永远报第一个颜色。
             HashMap<Item, Integer> directMissing = new HashMap<Item, Integer>(accumulated.missing);
-            List<Item> candidates = this.orderedIngredientCandidates(group.ingredient, availableItems);
             if (!candidates.isEmpty()) {
-                long have = 0L;
-                for (Item candidate : candidates) {
-                    have += (long)availableItems.getOrDefault(candidate, 0);
+                Item repName = candidates.get(0);
+                long maxStock = -1L;
+                for (Item c : candidates) {
+                    long st = avail.getOrDefault(c, 0);
+                    if (st > maxStock) {
+                        maxStock = st;
+                        repName = c;
+                    }
                 }
-                long stillNeed = Math.max(0L, (long)needed - have);
-                if (stillNeed > 0L) {
-                    directMissing.merge(candidates.get(0), (int)Math.min(stillNeed, (long)Integer.MAX_VALUE), Integer::sum);
+                if (repName != null && shortfall > 0) {
+                    directMissing.merge(repName, shortfall, Integer::sum);
                 }
             }
             MissingInfo directAccum = new MissingInfo(directMissing, Math.max(accumulated.maxDepth, depth));
-            return this.computeBestMissingForGroups(groups, groupIndex + 1, craftingTimes, availableItems, visitedItems, depth, maxDepthLimit, directAccum);
+            return this.computeBestMissingForGroups(groups, groupIndex + 1, craftingTimes, remainingAvail, visitedItems, depth, maxDepthLimit, directAccum);
         }
         return best;
     }
@@ -948,6 +1253,459 @@ public class RecipeResolver {
 
     public void clearCache() {
         this.recipeCache.clear();
+    }
+
+    /** "正向链缺料"估算用的小预算。 */
+    private long estBudget = 0L;
+
+    /** 解压来源索引:更密物品 → (可解压出的"无正向制造"细颗粒 → 每 1 个更密拆出的个数)。
+        只收录"细颗粒本身没有正向制造配方"的(如金块→金锭→金粒、压缩石→石头),
+        避免把 log→planks 这类正常 1→4 也算进去。 */
+    private Map<Item, Map<Item, Integer>> decompressByDense = null;
+
+    private Map<Item, Map<Item, Integer>> getDecompressByDense() {
+        if (this.decompressByDense == null) {
+            HashMap<Item, Map<Item, Integer>> map = new HashMap<Item, Map<Item, Integer>>();
+            for (Map.Entry<Item, List<CraftingRecipe>> e : this.getCraftingByResult().entrySet()) {
+                for (CraftingRecipe recipe : e.getValue()) {
+                    ItemStack fine;
+                    try {
+                        fine = recipe.getResultItem((HolderLookup.Provider)this.registryAccess);
+                    } catch (Exception ex) { continue; }
+                    if (fine == null || fine.isEmpty() || fine.getCount() <= 1) continue;
+                    Item fineItem = fine.getItem();
+                    if (fineItem == null || fineItem == Items.AIR) continue;
+                    if (!this.getForwardCraftingByResult().getOrDefault(fineItem, Collections.emptyList()).isEmpty()) continue;
+                    List<IngredientGroup> groups;
+                    try {
+                        groups = this.buildIngredientGroups(recipe);
+                    } catch (Exception ex) { continue; }
+                    if (groups.size() != 1 || groups.get(0).slotCount != 1) continue;
+                    for (ItemStack ms : groups.get(0).ingredient.getItems()) {
+                        Item dense = ms == null ? null : ms.getItem();
+                        if (dense == null || dense == Items.AIR || dense == fineItem) continue;
+                        map.computeIfAbsent(dense, k -> new HashMap<Item, Integer>()).put(fineItem, fine.getCount());
+                    }
+                }
+            }
+            this.decompressByDense = map;
+        }
+        return this.decompressByDense;
+    }
+
+    /** 把"仓库里已有的更密物品"可解压出的细颗粒补进可用池(不扣原物,仅用于缺料估算),
+        使缺料报告不把 铁粒/金锭/钻石 当缺口(你仓库有对应块时),而是真正缺的块数?不——
+        报告会落到真正缺的基础(如铁块够就不报铁粒)。 */
+    private void expandAvailableByDecompress(Map<Item, Integer> stock) {
+        Map<Item, Map<Item, Integer>> src = this.getDecompressByDense();
+        if (src == null || src.isEmpty()) return;
+        for (int pass = 0; pass < 6; ++pass) {
+            boolean changed = false;
+            HashMap<Item, Integer> snap = new HashMap<Item, Integer>(stock);
+            for (Map.Entry<Item, Integer> se : snap.entrySet()) {
+                int c = se.getValue();
+                if (c <= 0) continue;
+                Map<Item, Integer> fines = src.get(se.getKey());
+                if (fines == null) continue;
+                for (Map.Entry<Item, Integer> fe : fines.entrySet()) {
+                    long addL = Math.min((long)Integer.MAX_VALUE - (long)stock.getOrDefault(fe.getKey(), 0), (long)c * (long)fe.getValue());
+                    int add = (int)Math.max(0L, addL);
+                    if (add <= 0) continue;
+                    stock.merge(fe.getKey(), add, Integer::sum);
+                    changed = true;
+                }
+            }
+            if (!changed) break;
+        }
+    }
+
+    /** 只沿"正向制造链"(不含解压)展开的缺料估算 —— 合成失败后用它给出真正的基础物缺料:
+        1) 天然无循环(不看解压,三倍→二倍→压缩→石头,叶子即石头);
+        2) 确定性贪心(不逐个试所有成员求最优,避免指数爆炸):配方选"原料组最少"者
+           (白羊毛"4 线"只有 1 组原料,优先于"白染料+羊毛"),同族成员优先选头羊;
+           于是没羊毛造床时,会一路落到 白羊毛→线 这条基础路线,报缺 线,而不是 墨囊 等染料来源;
+        3) depth/预算硬上限,恒有结果(不会返回空)。 */
+    public Map<Item, Integer> computeBaseShortage(Item target, int requiredCount, Map<Item, Integer> availableItems) {
+        if (target == null || target == Items.AIR || requiredCount <= 0) {
+            return Collections.emptyMap();
+        }
+        this.estBudget = 120000L;
+        HashMap<Item, Integer> stock = new HashMap<Item, Integer>(availableItems == null ? Collections.emptyMap() : availableItems);
+        this.expandAvailableByDecompress(stock);
+        HashMap<Item, Integer> out = new HashMap<Item, Integer>();
+        // 简单稳定模式:纯头羊确定性下钻(plain=true,不做成员择优/试算),永不空、永不跳色。
+        this.greedyShortage(target, requiredCount, stock, new HashSet<Item>(), out, 0, true);
+        return out;
+    }
+
+    /** 确定性贪心展开:把 need 个 item 沿"最少原料组"的正向配方下钻到基础物叶子,写入 out。
+        同族组选头羊;库存能抵扣就抵扣;depth 封顶保证线性、不爆炸。
+        plain=true 表示"纯头羊"下钻(用于评估候选成员,不套娃地再做择优),避免指数爆炸;
+        plain=false 才会在成员之间择优(白床只要线 < 红床还要染料)。 */
+    private void greedyShortage(Item item, int need, Map<Item, Integer> stock, Set<Item> onStack, Map<Item, Integer> out, int depth, boolean plain) {
+        if (need <= 0) {
+            return;
+        }
+        if (depth > 22 || --this.estBudget < 0L) {
+            return;
+        }
+        int have = stock.getOrDefault(item, 0);
+        if (have > 0) {
+            int use = Math.min(have, need);
+            stock.put(item, have - use);
+            need -= use;
+        }
+        if (need <= 0) {
+            return;
+        }
+        if (onStack.contains(item)) {
+            out.merge(item, need, Integer::sum);
+            return;
+        }
+        // 用"原始全部工作台配方"(不筛反向/解压):彩色羊毛的染料配方必须可见,否则青色羊毛会被误当叶子。
+        // 循环/解压依赖由 onStack 与深度上限兜住;仓库里已有更密物品的解压已由 expandAvailableByDecompress 预补。
+        List<CraftingRecipe> fwd = this.getCraftingByResult().getOrDefault(item, Collections.emptyList());
+        if (fwd.isEmpty()) {
+            out.merge(item, need, Integer::sum);
+            return;
+        }
+        onStack.add(item);
+        CraftingRecipe chosenRecipe = null;
+        int minGroups = Integer.MAX_VALUE;
+        for (CraftingRecipe recipe : fwd) {
+            List<IngredientGroup> groups;
+            try {
+                groups = this.buildIngredientGroups(recipe);
+            } catch (Exception e) {
+                continue;
+            }
+            if (groups.isEmpty()) continue;
+            if (groups.size() < minGroups) {
+                minGroups = groups.size();
+                chosenRecipe = recipe;
+                if (minGroups == 1) break;
+            }
+        }
+        if (chosenRecipe == null) {
+            onStack.remove(item);
+            out.merge(item, need, Integer::sum);
+            return;
+        }
+        ItemStack rs;
+        try {
+            rs = chosenRecipe.getResultItem((HolderLookup.Provider)this.registryAccess);
+        } catch (Exception e) {
+            rs = null;
+        }
+        if (rs == null || rs.isEmpty()) {
+            onStack.remove(item);
+            out.merge(item, need, Integer::sum);
+            return;
+        }
+        int yield = Math.max(1, rs.getCount());
+        int times = (int)Math.ceil((double)need / (double)yield);
+        for (IngredientGroup g : this.buildIngredientGroups(chosenRecipe)) {
+            int gNeed = g.slotCount * times;
+            ArrayList<Item> members = new ArrayList<Item>();
+            for (ItemStack ms : g.ingredient.getItems()) {
+                Item m = ms == null ? null : ms.getItem();
+                if (m != null && m != Items.AIR && !members.contains(m)) members.add(m);
+            }
+            if (members.isEmpty()) {
+                continue;
+            }
+            Item chosen = null;
+            if (plain) {
+                // 纯头羊:选不需要其它同族成员的头羊,否则第一个不在当前链上的
+                HashSet<Item> fam = new HashSet<Item>(members);
+                for (Item mem : members) {
+                    if (this.isFamilyRoot(mem, fam)) { chosen = mem; break; }
+                }
+                if (chosen == null) {
+                    for (Item mem : members) {
+                        if (!onStack.contains(mem)) { chosen = mem; break; }
+                    }
+                }
+                if (chosen == null) chosen = members.get(0);
+            } else {
+                // 择优:每个成员用 plain(纯头羊、不套娃)深算缺料,取"种类最少、数量最少"者。
+                // 例:做"任意床"时,白床只要 线(1 类) < 红床要 线+红色郁金香(2 类) → 白床胜出。
+                HashMap<Item, Integer> stockSnap = new HashMap<Item, Integer>(stock);
+                long chosenScore = Long.MAX_VALUE;
+                for (Item mem : members) {
+                    HashMap<Item, Integer> tmp = new HashMap<Item, Integer>();
+                    HashMap<Item, Integer> trialStock = new HashMap<Item, Integer>(stockSnap);
+                    this.greedyShortage(mem, gNeed, trialStock, new HashSet<Item>(onStack), tmp, depth + 1, true);
+                    if (tmp.isEmpty()) { chosen = mem; break; }
+                    long sum = 0L;
+                    for (Integer v : tmp.values()) sum += (long)v;
+                    long score = (long)tmp.size() * 1000000L + sum;
+                    if (score < chosenScore) {
+                        chosenScore = score;
+                        chosen = mem;
+                    }
+                }
+                if (chosen == null) chosen = members.get(0);
+            }
+            this.greedyShortage(chosen, gNeed, stock, onStack, out, depth + 1, plain);
+        }
+        onStack.remove(item);
+    }
+
+    /** ---- 规范树(阶段一,库存无关,按 Item 记忆化,构建一次) ---- */
+
+    private final Map<Item, CanonPlan> canonCache = new HashMap<Item, CanonPlan>();
+    private final Map<Item, List<Item>> canonLeafMemo = new HashMap<Item, List<Item>>();
+
+    /** 无库存时"制造 item 需用到"的不同基础叶子的最小集合(仅用于结构定型时选代表/配方)。
+        染料这类共享菱形只算一次并被记忆化,不受某个仓库状态影响。 */
+    private List<Item> canonLeaf(Item item, Set<Item> progress) {
+        if (item == null || item == Items.AIR) {
+            return new ArrayList<Item>();
+        }
+        List<Item> hit = this.canonLeafMemo.get(item);
+        if (hit != null) {
+            return hit;
+        }
+        if (progress.contains(item)) {
+            ArrayList<Item> cyc = new ArrayList<Item>();
+            cyc.add(item);
+            return cyc;
+        }
+        List<CraftingRecipe> fwd = this.getForwardCraftingByResult().getOrDefault(item, Collections.emptyList());
+        if (fwd.isEmpty()) {
+            ArrayList<Item> single = new ArrayList<Item>();
+            single.add(item);
+            this.canonLeafMemo.put(item, single);
+            return single;
+        }
+        progress.add(item);
+        List<Item> best = null;
+        for (CraftingRecipe recipe : fwd) {
+            List<IngredientGroup> groups;
+            try {
+                groups = this.buildIngredientGroups(recipe);
+            } catch (Exception e) {
+                continue;
+            }
+            if (groups.isEmpty()) continue;
+            LinkedHashSet<Item> acc = new LinkedHashSet<Item>();
+            boolean ok = true;
+            for (IngredientGroup g : groups) {
+                ArrayList<Item> members = new ArrayList<Item>();
+                for (ItemStack ms : g.ingredient.getItems()) {
+                    Item m = ms == null ? null : ms.getItem();
+                    if (m != null && m != Items.AIR && !members.contains(m)) members.add(m);
+                }
+                if (members.isEmpty()) { ok = false; break; }
+                List<Item> bm = null;
+                for (Item mem : members) {
+                    List<Item> lf = this.canonLeaf(mem, progress);
+                    if (bm == null || lf.size() < bm.size()) bm = lf;
+                }
+                acc.addAll(bm);
+            }
+            if (!ok) continue;
+            if (best == null || acc.size() < best.size()) best = new ArrayList<Item>(acc);
+            if (best.size() == 1) break;
+        }
+        progress.remove(item);
+        if (best == null) {
+            best = new ArrayList<Item>();
+            best.add(item);
+        }
+        best.sort(Comparator.comparing(Item::getDescriptionId));
+        this.canonLeafMemo.put(item, best);
+        return best;
+    }
+
+    /** 给物品定一棵"标准制造树":配方 = 叶子集合最小的;每个标签槽位选"叶子最少"的代表成员
+        (做"任意床"会选中白床——它只要线;白羊毛同理压过彩色)。递归、按 Item 缓存。 */
+    private CanonPlan canonPlan(Item item, Set<Item> progress) {
+        if (item == null || item == Items.AIR) {
+            return CanonPlan.leaf(item);
+        }
+        CanonPlan cached = this.canonCache.get(item);
+        if (cached != null) {
+            return cached;
+        }
+        if (progress.contains(item)) {
+            CanonPlan cycLeaf = CanonPlan.leaf(item);
+            this.canonCache.put(item, cycLeaf);
+            return cycLeaf;
+        }
+        List<CraftingRecipe> fwd = this.getForwardCraftingByResult().getOrDefault(item, Collections.emptyList());
+        if (fwd.isEmpty()) {
+            CanonPlan lp = CanonPlan.leaf(item);
+            this.canonCache.put(item, lp);
+            return lp;
+        }
+        progress.add(item);
+        CanonPlan best = null;
+        int bestLeaf = Integer.MAX_VALUE;
+        for (CraftingRecipe recipe : fwd) {
+            ItemStack rs;
+            try {
+                rs = recipe.getResultItem((HolderLookup.Provider)this.registryAccess);
+            } catch (Exception e) { continue; }
+            if (rs == null || rs.isEmpty()) continue;
+            List<IngredientGroup> groups;
+            try {
+                groups = this.buildIngredientGroups(recipe);
+            } catch (Exception e) { continue; }
+            if (groups.isEmpty()) continue;
+            ArrayList<CanonSlot> slots = new ArrayList<CanonSlot>();
+            LinkedHashSet<Item> leafAcc = new LinkedHashSet<Item>();
+            boolean ok = true;
+            for (IngredientGroup g : groups) {
+                ArrayList<Item> members = new ArrayList<Item>();
+                for (ItemStack ms : g.ingredient.getItems()) {
+                    Item m = ms == null ? null : ms.getItem();
+                    if (m != null && m != Items.AIR && !members.contains(m)) members.add(m);
+                }
+                if (members.isEmpty()) { ok = false; break; }
+                Item repPick = members.get(0);
+                int repLeaf = Integer.MAX_VALUE;
+                for (Item mem : members) {
+                    List<Item> lf = this.canonLeaf(mem, progress);
+                    if (lf.size() < repLeaf) {
+                        repLeaf = lf.size();
+                        repPick = mem;
+                    }
+                }
+                slots.add(new CanonSlot(repPick, members, g.slotCount));
+                leafAcc.addAll(this.canonLeaf(repPick, progress));
+            }
+            if (!ok) continue;
+            if (best == null || leafAcc.size() < bestLeaf) {
+                bestLeaf = leafAcc.size();
+                best = new CanonPlan(item, Math.max(1, rs.getCount()), false, slots);
+            }
+            if (bestLeaf == 1) break;
+        }
+        progress.remove(item);
+        if (best == null) {
+            CanonPlan lp = CanonPlan.leaf(item);
+            this.canonCache.put(item, lp);
+            return lp;
+        }
+        String dbg = item.getDescriptionId();
+        if (dbg.contains("bed") || dbg.contains("_wool") || dbg.contains("dye")) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("[canon] ").append(dbg).append(" 叶子数=").append(bestLeaf).append(" 槽位:");
+            for (CanonSlot s : best.slots) {
+                sb.append(" (").append(s.rep == null ? "?" : s.rep.getDescriptionId()).append(" x").append(s.count).append(")");
+            }
+            LOGGER.info(sb.toString());
+        }
+        this.canonCache.put(item, best);
+        return best;
+    }
+
+    /** 阶段二:沿固定规范树线性扣库存,缺到叶子就记入 out。无回溯、无成员枚举。 */
+    private void walkPlan(CanonPlan plan, int need, Map<Item, Integer> stock, Map<Item, Integer> out) {
+        if (plan == null || need <= 0) {
+            return;
+        }
+        Item it = plan.item;
+        if (it == null || it == Items.AIR) {
+            return;
+        }
+        int have = stock.getOrDefault(it, 0);
+        if (have > 0) {
+            int use = Math.min(have, need);
+            stock.put(it, have - use);
+            need -= use;
+        }
+        if (need <= 0) {
+            return;
+        }
+        if (plan.leaf || plan.slots.isEmpty()) {
+            out.merge(it, need, Integer::sum);
+            return;
+        }
+        int times = (int)Math.ceil((double)need / (double)Math.max(1, plan.yield));
+        for (CanonSlot slot : plan.slots) {
+            int childNeed = slot.count * times;
+            this.walkPlan(this.canonPlan(slot.rep, new HashSet<Item>()), childNeed, stock, out);
+        }
+    }
+
+    /** 超时兜底:对目标物品按"第一个工作台配方各组直接缺口"做一次不递归的估算,
+        保证即使深搜爆炸/超时,也能给玩家一个"缺什么"的明确提示,而不是空白。 */
+    public Map<Item, Integer> estimateTopLevelMissing(Item targetItem, int requiredCount, Map<Item, Integer> availableItems) {
+        if (targetItem == null || targetItem == Items.AIR || requiredCount <= 0) {
+            return Collections.emptyMap();
+        }
+        for (CraftingRecipe recipe : this.getCraftingRecipesForItem(targetItem)) {
+            Map<Item, Integer> miss = this.directShortfallForRecipe(recipe, requiredCount, availableItems);
+            if (miss != null && !miss.isEmpty()) {
+                return miss;
+            }
+        }
+        return Collections.emptyMap();
+    }
+
+    /** 单一配方各原料组的直接缺口(不递归)。缺口挂在"该组库存最多的成员"上,
+        使提示贴近你实际拥有的颜色,而不是永远第一个成员。 */
+    private Map<Item, Integer> directShortfallForRecipe(Recipe<?> recipe, int requiredCount, Map<Item, Integer> availableItems) {
+        ItemStack result = recipe.getResultItem((HolderLookup.Provider)this.registryAccess);
+        if (result == null || result.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        int yield = Math.max(1, result.getCount());
+        int times = (int)Math.ceil((double)requiredCount / (double)yield);
+        HashMap<Item, Integer> miss = new HashMap<Item, Integer>();
+        for (IngredientGroup g : this.buildIngredientGroups(recipe)) {
+            int gNeed = g.slotCount * times;
+            long have = 0L;
+            Item rep = null;
+            long repStock = -1L;
+            for (ItemStack s : g.ingredient.getItems()) {
+                Item m = s == null ? null : s.getItem();
+                if (m == null || m == Items.AIR) continue;
+                long st = availableItems == null ? 0L : (long)availableItems.getOrDefault(m, 0);
+                have += st;
+                if (st > repStock) {
+                    repStock = st;
+                    rep = m;
+                }
+            }
+            if (rep != null && have < (long)gNeed) {
+                miss.merge(rep, (int)Math.min((long)Integer.MAX_VALUE, (long)gNeed - have), Integer::sum);
+            }
+        }
+        return miss;
+    }
+
+    private static final class CanonPlan {
+        private final Item item;
+        private final int yield;
+        private final boolean leaf;
+        private final List<CanonSlot> slots;
+
+        private CanonPlan(Item item, int yield, boolean leaf, List<CanonSlot> slots) {
+            this.item = item;
+            this.yield = yield;
+            this.leaf = leaf;
+            this.slots = slots == null ? Collections.emptyList() : slots;
+        }
+
+        private static CanonPlan leaf(Item item) {
+            return new CanonPlan(item, 1, true, Collections.<CanonSlot>emptyList());
+        }
+    }
+
+    private static final class CanonSlot {
+        private final Item rep;
+        private final List<Item> alternatives;
+        private final int count;
+
+        private CanonSlot(Item rep, List<Item> alternatives, int count) {
+            this.rep = rep;
+            this.alternatives = alternatives == null ? Collections.emptyList() : alternatives;
+            this.count = count;
+        }
     }
 
     private static final class IngredientGroup {

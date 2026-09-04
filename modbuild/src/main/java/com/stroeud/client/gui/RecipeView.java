@@ -172,6 +172,31 @@ public class RecipeView {
         return stacks[0].copy();
     }
 
+    /** 取九宫格某原料格的全部候选物品(用于多成员标签,如 #minecraft:beds 的多种床色),可空。 */
+    public List<ItemStack> getIngredientOptions(int slotIndex) {
+        ArrayList<ItemStack> out = new ArrayList<ItemStack>();
+        if (slotIndex < 0 || slotIndex >= 9 || !this.hasRecipes()) {
+            return out;
+        }
+        Recipe<?> current = this.recipes.get(this.currentRecipeIndex);
+        if (!(current instanceof CraftingRecipe)) {
+            return out;
+        }
+        NonNullList<Ingredient> ingredients = ((CraftingRecipe)current).getIngredients();
+        if (slotIndex >= ingredients.size()) {
+            return out;
+        }
+        Ingredient ingredient = ingredients.get(slotIndex);
+        if (ingredient == null || ingredient.isEmpty()) {
+            return out;
+        }
+        for (ItemStack s : ingredient.getItems()) {
+            if (s == null || s.isEmpty()) continue;
+            out.add(s.copy());
+        }
+        return out;
+    }
+
     /** 命中结果栏(箭头右侧的成品格),返回 0 或 -1。 */
     public int getResultSlotIndex(double mouseX, double mouseY, int px, int py) {
         if (!this.hasRecipes()) {
