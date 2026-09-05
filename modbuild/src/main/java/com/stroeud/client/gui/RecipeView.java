@@ -359,7 +359,7 @@ public class RecipeView {
                 return false;
             }
         });
-        this.trySynthesisButton = Button.builder(Component.translatable("gui.storageandoneclicksynthesis.synthesize"), b -> this.onTrySynthesis()).bounds(px + 66, ry, 56, 16).build();
+        this.trySynthesisButton = new TechButton(px + 66, ry, 56, 16, Component.translatable("gui.storageandoneclicksynthesis.synthesize"), b -> this.onTrySynthesis());
         this.updateControls();
     }
 

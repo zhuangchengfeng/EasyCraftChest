@@ -38,5 +38,20 @@
   "storageandoneclicksynthesis.configuration.logDirtBlock": "记录泥土方块",
   "storageandoneclicksynthesis.configuration.magicNumberIntroduction": "魔法数字说明",
   "storageandoneclicksynthesis.configuration.magicNumber": "魔法数字",
-  "tooltip.storageandoneclicksynthesis.storage_summary": "包含：%s 个物品，%s 种类型"
+  "tooltip.storageandoneclicksynthesis.storage_summary": "包含：%s 个物品，%s 种类型",
+
+  "gui.storageandoneclicksynthesis.rail.search_scope": "搜索范围",
+  "gui.storageandoneclicksynthesis.rail.search.both": "共同作用（仓库 + 配方）",
+  "gui.storageandoneclicksynthesis.rail.search.catalog_only": "仅在配方栏搜索",
+  "gui.storageandoneclicksynthesis.rail.search.storage_only": "仅在仓库栏搜索",
+  "gui.storageandoneclicksynthesis.rail.auto_focus": "打开容器时自动聚焦搜索框",
+  "gui.storageandoneclicksynthesis.rail.on": "开",
+  "gui.storageandoneclicksynthesis.rail.off": "关",
+  "gui.storageandoneclicksynthesis.rail.sort": "仓库物品排序",
+  "gui.storageandoneclicksynthesis.rail.sort.count": "按数量（#）",
+  "gui.storageandoneclicksynthesis.rail.sort.name": "按名称（ID）",
+  "gui.storageandoneclicksynthesis.rail.sort.time": "按最后修改时间",
+  "gui.storageandoneclicksynthesis.rail.sort_direction": "排序方向",
+  "gui.storageandoneclicksynthesis.rail.desc": "降序",
+  "gui.storageandoneclicksynthesis.rail.asc": "升序"
 }

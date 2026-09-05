@@ -6,6 +6,7 @@
   "gui.storageandoneclicksynthesis.open_item_manager": "Synthesis",
   "gui.storageandoneclicksynthesis.view_recipe": "View Recipe",
   "gui.storageandoneclicksynthesis.search": "Search...",
+  "gui.storageandoneclicksynthesis.no_item_selected": "Please select an item first",
   "gui.customstorage.recipe_view": "Recipe View",
   "gui.storageandoneclicksynthesis.stats": "Types: %s | Items: %s",
   "gui.storageandoneclicksynthesis.recipe_hint": "Click an item on the right to view its recipe",
@@ -37,5 +38,20 @@
   "storageandoneclicksynthesis.configuration.logDirtBlock": "Log Dirt Block",
   "storageandoneclicksynthesis.configuration.magicNumberIntroduction": "Magic Number Text",
   "storageandoneclicksynthesis.configuration.magicNumber": "Magic Number",
-  "tooltip.storageandoneclicksynthesis.storage_summary": "Contains: %s items, %s types"
+  "tooltip.storageandoneclicksynthesis.storage_summary": "Contains: %s items, %s types",
+
+  "gui.storageandoneclicksynthesis.rail.search_scope": "Search scope",
+  "gui.storageandoneclicksynthesis.rail.search.both": "Both (storage + recipe)",
+  "gui.storageandoneclicksynthesis.rail.search.catalog_only": "Recipe panel only",
+  "gui.storageandoneclicksynthesis.rail.search.storage_only": "Storage panel only",
+  "gui.storageandoneclicksynthesis.rail.auto_focus": "Auto-focus search on open",
+  "gui.storageandoneclicksynthesis.rail.on": "On",
+  "gui.storageandoneclicksynthesis.rail.off": "Off",
+  "gui.storageandoneclicksynthesis.rail.sort": "Storage sorting",
+  "gui.storageandoneclicksynthesis.rail.sort.count": "By count (#)",
+  "gui.storageandoneclicksynthesis.rail.sort.name": "By name (ID)",
+  "gui.storageandoneclicksynthesis.rail.sort.time": "By last modified",
+  "gui.storageandoneclicksynthesis.rail.sort_direction": "Sort direction",
+  "gui.storageandoneclicksynthesis.rail.desc": "Descending",
+  "gui.storageandoneclicksynthesis.rail.asc": "Ascending"
 }

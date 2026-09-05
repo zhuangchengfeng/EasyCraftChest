@@ -59,6 +59,8 @@ public class CustomStorageData {
     private static final Logger LOGGER = LogUtils.getLogger();
     private final Map<String, Long> storedItems = new HashMap<String, Long>();
     private final List<String> itemOrder = new ArrayList<String>();
+    /** 每个物品种类最近一次"增/减"时间(毫秒),用于客户端按最后修改排序。 */
+    private final Map<String, Long> lastModified = new HashMap<String, Long>();
     private final Map<String, Tag> fullItemDataCache = new ConcurrentHashMap<String, Tag>();
     private HolderLookup.Provider registryAccess = null;
     private String searchFilter = "";
@@ -88,6 +90,7 @@ public class CustomStorageData {
         if (currentCount == 0L) {
             this.itemOrder.add(itemKey);
         }
+        this.touch(itemKey);
         this.setChanged();
         return stack.getCount();
     }
@@ -102,6 +105,7 @@ public class CustomStorageData {
         if (currentCount == 0L) {
             this.itemOrder.add(itemKey);
         }
+        this.touch(itemKey);
         this.setChanged();
         return amount;
     }
@@ -124,6 +128,7 @@ public class CustomStorageData {
         } else {
             this.storedItems.put(itemKey, newCount);
         }
+        this.touch(itemKey);
         this.setChanged();
         return result;
     }
@@ -235,10 +240,51 @@ public class CustomStorageData {
     public void clear() {
         this.storedItems.clear();
         this.itemOrder.clear();
+        this.lastModified.clear();
         this.searchFilter = "";
         this.currentPage = 0;
         this.setChanged();
         this.validateDataIntegrity();
+    }
+
+    /** 该存储键是否仍指向一个"真实存在"的物品(排除已卸载模组后解析成空气/屏障的孤儿)。 */
+    private static boolean isItemStillPresent(String key) {
+        if (key == null || key.isEmpty()) {
+            return false;
+        }
+        try {
+            String base = key.indexOf('#') >= 0 ? key.substring(0, key.indexOf('#')) : key;
+            ResourceLocation loc = ResourceLocation.parse(base);
+            net.minecraft.world.item.Item item = BuiltInRegistries.ITEM.get(loc);
+            return item != null && item != Items.AIR && item != Items.BARRIER;
+        }
+        catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 清理孤儿条目(物品已不存在的键),避免出现"屏障且拿不出来"。 */
+    private void pruneOrphaned() {
+        this.itemOrder.removeIf(k -> !this.storedItems.containsKey(k));
+        this.fullItemDataCache.keySet().removeIf(k -> !this.storedItems.containsKey(k));
+        this.lastModified.keySet().removeIf(k -> !this.storedItems.containsKey(k));
+    }
+
+    /** 记录某物品种类"最后被改动"的时间。 */
+    private void touch(String itemKey) {
+        if (itemKey != null) {
+            this.lastModified.put(itemKey, System.currentTimeMillis());
+        }
+    }
+
+    /** 现存每种物品的最后修改时间快照(按种类→毫秒;无记录的记为 0)。 */
+    public Map<String, Long> getLastModifiedMap() {
+        HashMap<String, Long> out = new HashMap<String, Long>();
+        for (String key : this.storedItems.keySet()) {
+            Long t = this.lastModified.get(key);
+            out.put(key, t == null ? 0L : t);
+        }
+        return out;
     }
 
     private void validateDataIntegrity() {
@@ -321,6 +367,14 @@ public class CustomStorageData {
             }
         }
         tag.put("FullDataCache", (Tag)compoundTag);
+        if (!this.lastModified.isEmpty()) {
+            CompoundTag lmTag = new CompoundTag();
+            for (Map.Entry<String, Long> e : this.lastModified.entrySet()) {
+                if (e.getValue() == null) continue;
+                lmTag.putLong(e.getKey(), e.getValue().longValue());
+            }
+            tag.put("LastModified", (Tag)lmTag);
+        }
         tag.putString("SearchFilter", this.searchFilter);
         tag.putInt("CurrentPage", this.currentPage);
         return tag;
@@ -330,6 +384,7 @@ public class CustomStorageData {
         this.storedItems.clear();
         this.itemOrder.clear();
         this.fullItemDataCache.clear();
+        this.lastModified.clear();
         int version = tag.getInt("version");
         if (version > 2) {
             System.err.println("Warning: Loading data from newer version (" + version + "), some data may be lost.");
@@ -338,6 +393,10 @@ public class CustomStorageData {
             CompoundTag itemsTag = tag.getCompound("StoredItems");
             for (String key : itemsTag.getAllKeys()) {
                 try {
+                    // 跳过"物品已不存在的孤儿"(如它所属的模组被移除),不加载成屏障
+                    if (!CustomStorageData.isItemStillPresent(key)) {
+                        continue;
+                    }
                     this.storedItems.put(key, itemsTag.getLong(key));
                 }
                 catch (Exception e) {
@@ -368,8 +427,20 @@ public class CustomStorageData {
                 }
             }
         }
+        if (tag.contains("LastModified")) {
+            CompoundTag lmTag = tag.getCompound("LastModified");
+            for (String key : lmTag.getAllKeys()) {
+                try {
+                    this.lastModified.put(key, lmTag.getLong(key));
+                }
+                catch (Exception e) {
+                    // ignore single corrupt entry
+                }
+            }
+        }
         this.searchFilter = tag.getString("SearchFilter");
         this.currentPage = tag.getInt("CurrentPage");
+        this.pruneOrphaned();
         this.setChanged();
     }
 
@@ -500,7 +571,7 @@ public class CustomStorageData {
                     }
                 }
             }
-            if ((baseStack = new ItemStack((ItemLike)BuiltInRegistries.ITEM.get(itemId = ResourceLocation.parse((String)(parts = key.split("#", 2))[0])))).getItem() == Items.AIR) {
+            if ((baseStack = new ItemStack((ItemLike)BuiltInRegistries.ITEM.get(itemId = ResourceLocation.parse((String)(parts = key.split("#", 2))[0])))).getItem() == Items.AIR || baseStack.getItem() == Items.BARRIER) {
                 return ItemStack.EMPTY;
             }
             return baseStack;

@@ -92,9 +92,24 @@ extends AbstractContainerScreen<CustomStorageContainer> {
     private static final int CATALOG_PAGE_INFO_X = 265;
     private static final int CATALOG_PAGE_INFO_Y = 22;
 
+    // ---- RS 式左侧模式按钮:搜索范围 / 自动聚焦 / 排序(偏好持久化到 config/automatic-crafting_ui_prefs.json) ----
+    private enum SearchScope { BOTH, CATALOG_ONLY, STORAGE_ONLY }
+    private enum SortMode { COUNT, NAME, TIME }
+    private static final int RAIL_W = 16;
+    private static final int RAIL_GAP = 2;
+    private static final java.io.File UI_PREFS_FILE = net.neoforged.fml.loading.FMLPaths.CONFIGDIR.get().resolve("automatic-crafting_ui_prefs.json").toFile();
+    private int railLeft = 2;
+    private int railTop = 0;
+    private SearchScope searchScope = SearchScope.BOTH;
+    private boolean autoFocusSearch = false;
+    private SortMode sortMode = SortMode.COUNT;
+    /** 排序方向:true=降序(↓),false=升序(↑)。 */
+    private boolean sortDesc = true;
+
     private int leftPos;
     private int topPos;
     private Map<String, Long> storageData = new HashMap<String, Long>();
+    private final Map<String, Long> lastModifiedData = new HashMap<String, Long>();
     private List<Map.Entry<String, Long>> cachedFilteredStorage = null;
     private int currentPage = 0;
     private int maxPage = 0;
@@ -141,6 +156,9 @@ extends AbstractContainerScreen<CustomStorageContainer> {
     protected void init() {
         super.init();
         this.leftPos = (this.width - 354) / 2;
+        CustomStorageScreen.loadUiPrefs(this);
+        this.railLeft = Math.max(0, this.leftPos - RAIL_W - RAIL_GAP - 3);
+        this.railTop = this.topPos + 34;
         this.topPos = (this.height - 260) / 2;
         StoredState saved = STATE_CACHE.get(this.blockPos);
         if (saved != null) {
@@ -157,7 +175,12 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         this.searchBox.setResponder(this::onSearchChanged);
         this.searchBox.setValue(this.searchFilter);
         this.addRenderableWidget(this.searchBox);
-        this.clearSearchButton = Button.builder(Component.literal("X"), button -> this.clearSearch()).bounds(this.leftPos + 122, this.topPos + 151, 16, 16).build();
+        if (this.autoFocusSearch) {
+            this.searchBox.setFocused(true);
+            // 让 Screen 的焦点路径也指向搜索框,否则字符输入不会路由进来
+            this.setFocused(this.searchBox);
+        }
+        this.clearSearchButton = new TechButton(this.leftPos + 122, this.topPos + 151, 16, 16, Component.literal(""), button -> this.clearSearch()).icon(net.minecraft.resources.ResourceLocation.fromNamespaceAndPath("storageandoneclicksynthesis", "textures/gui/deletex.png"), 9, 7);
         this.addRenderableWidget(this.clearSearchButton);
         this.recipeView.createControls(this.font, this.leftPos + 184, this.topPos + 152);
         if (saved != null) {
@@ -182,6 +205,7 @@ extends AbstractContainerScreen<CustomStorageContainer> {
 
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         super.render(graphics, mouseX, mouseY, partialTick);
+        this.drawModeRail(graphics, mouseX, mouseY);
         ++this.syncTicker;
         if (this.syncTicker >= 5) {
             this.syncTicker = 0;
@@ -193,6 +217,7 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         this.renderItemCounts(graphics, mouseX, mouseY);
         this.renderTooltips(graphics, mouseX, mouseY);
         this.renderCatalogTooltips(graphics, mouseX, mouseY);
+        this.renderRailTooltip(graphics, mouseX, mouseY);
         this.recipeView.render(graphics, this.font, this.leftPos + 184, this.topPos + 152, mouseX, mouseY);
     }
 
@@ -476,6 +501,10 @@ extends AbstractContainerScreen<CustomStorageContainer> {
     }
 
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        // 左侧模式按钮轨(左键)
+        if (button == 0 && this.handleModeRailClick(mouseX, mouseY)) {
+            return true;
+        }
         // 点击输入框以外区域时,取消输入框聚焦(否则后续按键会被输入框吞掉,A 键置顶失效)
         boolean onSearchBox = this.searchBox != null && this.searchBox.isMouseOver(mouseX, mouseY);
         boolean onCountField = this.recipeView.getSynthesisCountField() != null && this.recipeView.getSynthesisCountField().isMouseOver(mouseX, mouseY);
@@ -716,6 +745,203 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         this.onSearchChanged("");
     }
 
+    private void refreshAfterModeChange() {
+        this.cachedFilteredStorage = null;
+        this.currentPage = 0;
+        this.applyStorageFilter();
+        this.applyCatalogFilter();
+        this.updatePageButtons();
+    }
+
+    /** 左侧按钮轨点击:0=搜索范围循环,1=自动聚焦切换,2=排序方式循环,3=升/降序切换。 */
+    private boolean handleModeRailClick(double mouseX, double mouseY) {
+        if (mouseX < (double)this.railLeft || mouseX >= (double)(this.railLeft + RAIL_W)) {
+            return false;
+        }
+        if (mouseY < (double)this.railTop || mouseY >= (double)(this.railTop + 80)) {
+            return false;
+        }
+        int idx = (int)(mouseY - (double)this.railTop) / 20;
+        if (idx == 0) {
+            this.searchScope = SearchScope.values()[(this.searchScope.ordinal() + 1) % SearchScope.values().length];
+        } else if (idx == 1) {
+            this.autoFocusSearch = !this.autoFocusSearch;
+        } else if (idx == 2) {
+            this.sortMode = SortMode.values()[(this.sortMode.ordinal() + 1) % SortMode.values().length];
+        } else if (idx == 3) {
+            this.sortDesc = !this.sortDesc;
+        } else {
+            return false;
+        }
+        CustomStorageScreen.saveUiPrefs(this);
+        this.refreshAfterModeChange();
+        return true;
+    }
+
+    /** 绘制 RS 式左侧按钮轨(背板 + 模式按钮)。 */
+    private void drawModeRail(GuiGraphics graphics, int mouseX, int mouseY) {
+        if (this.railLeft < 0) {
+            return;
+        }
+        int hover = this.railHoverIndex(mouseX, mouseY);
+        // 背板:科技感深蓝半透明
+        graphics.fill(this.railLeft - 2, this.railTop - 3, this.railLeft + RAIL_W + 2, this.railTop + 83, 0xC0121622);
+        graphics.fill(this.railLeft - 2, this.railTop - 3, this.railLeft + RAIL_W + 2, this.railTop - 2, -11184811);
+        graphics.fill(this.railLeft - 2, this.railTop + 82, this.railLeft + RAIL_W + 2, this.railTop + 83, -11184811);
+        for (int i = 0; i < 4; i++) {
+            int y = this.railTop + i * 20;
+            boolean active = (i == 0 && this.searchScope != SearchScope.BOTH) || (i == 1 && this.autoFocusSearch) || i == 2 || i == 3;
+            boolean hovered = hover == i;
+            int inner = hovered ? 0x77224488 : (active ? 0x552266FF : 0x55101014);
+            graphics.fill(this.railLeft, y, this.railLeft + RAIL_W, y + 16, inner);
+            int border = hovered ? -1 : (active ? -16722433 : -11184811);
+            this.drawBorder(graphics, this.railLeft, y, RAIL_W, 17, border);
+            if (active) {
+                graphics.fill(this.railLeft, y, this.railLeft + RAIL_W, y + 1, -16722433);
+            }
+            this.drawRailButtonIcon(graphics, i, this.railLeft, y, hovered ? -1 : -16722433);
+        }
+    }
+
+    /** 画单个按钮的图标:0=搜索范围(L/L+R/R),1=自动聚焦,2=排序(# / ID / 时钟)。 */
+    private void drawRailButtonIcon(GuiGraphics graphics, int idx, int x, int y, int col) {
+        if (idx == 0) {
+            String t = this.searchScope == SearchScope.BOTH ? "L+R" : (this.searchScope == SearchScope.CATALOG_ONLY ? "R" : "L");
+            this.drawRailText(graphics, t, x, y, col);
+            return;
+        }
+        if (idx == 1) {
+            String t = this.autoFocusSearch ? "A" : "-";
+            graphics.drawString(this.font, t, x + (RAIL_W - this.font.width(t)) / 2, y + 5, col);
+            return;
+        }
+        if (idx == 3) {
+            // 升/降序箭头
+            this.drawRailText(graphics, this.sortDesc ? "↓" : "↑", x, y, col);
+            return;
+        }
+        if (this.sortMode == SortMode.COUNT) {
+            graphics.drawString(this.font, "#", x + (RAIL_W - this.font.width("#")) / 2, y + 5, col);
+        } else if (this.sortMode == SortMode.NAME) {
+            this.drawRailText(graphics, "ID", x, y, col);
+        } else {
+            // 直接渲染"时钟"物品图标,清晰且不会被缩放糊掉
+            graphics.renderItem(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.CLOCK), x, y);
+        }
+    }
+
+    /** 在 16×16 按钮里画文字;太长自动缩小,保证放得下。 */
+    private void drawRailText(GuiGraphics graphics, String text, int x, int y, int col) {
+        int w = this.font.width(text);
+        if (w <= RAIL_W - 2) {
+            graphics.drawString(this.font, text, x + (RAIL_W - w) / 2, y + 5, col);
+            return;
+        }
+        float scale = (float)(RAIL_W - 2) / (float)w;
+        float sw = w * scale;
+        graphics.pose().pushPose();
+        graphics.pose().translate((double)(x + (RAIL_W - sw) / 2.0f), (double)(y + 5), 0.0);
+        graphics.pose().scale(scale, scale, 1.0f);
+        graphics.drawString(this.font, text, 0, 0, col);
+        graphics.pose().popPose();
+    }
+
+    private int railHoverIndex(double mouseX, double mouseY) {
+        if (mouseX < (double)this.railLeft || mouseX >= (double)(this.railLeft + RAIL_W)) {
+            return -1;
+        }
+        if (mouseY < (double)this.railTop || mouseY >= (double)(this.railTop + 80)) {
+            return -1;
+        }
+        int idx = (int)(mouseY - (double)this.railTop) / 20;
+        return idx >= 0 && idx <= 3 ? idx : -1;
+    }
+
+    /** 悬停左侧按钮时给出中英 tooltip。 */
+    private void renderRailTooltip(GuiGraphics graphics, int mouseX, int mouseY) {
+        int idx = this.railHoverIndex(mouseX, mouseY);
+        if (idx < 0) {
+            return;
+        }
+        java.util.List<Component> lines = new ArrayList<Component>();
+        if (idx == 0) {
+            lines.add(Component.translatable("gui.storageandoneclicksynthesis.rail.search_scope"));
+            lines.add(Component.translatable("gui.storageandoneclicksynthesis.rail.search." + this.searchScope.name().toLowerCase()));
+        } else if (idx == 1) {
+            lines.add(Component.translatable("gui.storageandoneclicksynthesis.rail.auto_focus"));
+            lines.add(Component.translatable(this.autoFocusSearch ? "gui.storageandoneclicksynthesis.rail.on" : "gui.storageandoneclicksynthesis.rail.off"));
+        } else if (idx == 2) {
+            lines.add(Component.translatable("gui.storageandoneclicksynthesis.rail.sort"));
+            lines.add(Component.translatable("gui.storageandoneclicksynthesis.rail.sort." + this.sortMode.name().toLowerCase()));
+        } else {
+            lines.add(Component.translatable("gui.storageandoneclicksynthesis.rail.sort_direction"));
+            lines.add(Component.translatable(this.sortDesc ? "gui.storageandoneclicksynthesis.rail.desc" : "gui.storageandoneclicksynthesis.rail.asc"));
+        }
+        graphics.renderComponentTooltip(this.font, lines, mouseX, mouseY);
+    }
+
+    private static void loadUiPrefs(CustomStorageScreen screen) {
+        try {
+            if (CustomStorageScreen.UI_PREFS_FILE.exists()) {
+                com.google.gson.Gson gson = new com.google.gson.Gson();
+                java.io.FileReader reader = new java.io.FileReader(CustomStorageScreen.UI_PREFS_FILE);
+                UiPrefsData data = gson.fromJson(reader, UiPrefsData.class);
+                reader.close();
+                if (data != null) {
+                    if (data.scope != null) {
+                        try {
+                            screen.searchScope = SearchScope.valueOf(data.scope);
+                        }
+                        catch (Exception e) {
+                            // ignore
+                        }
+                    }
+                    screen.autoFocusSearch = data.autoFocus;
+                    if (data.sort != null) {
+                        try {
+                            screen.sortMode = SortMode.valueOf(data.sort);
+                        }
+                        catch (Exception e) {
+                            // ignore
+                        }
+                    }
+                    screen.sortDesc = data.desc;
+                }
+            }
+        }
+        catch (Exception e) {
+            // ignore corrupt prefs
+        }
+    }
+
+    private static void saveUiPrefs(CustomStorageScreen screen) {
+        try {
+            UiPrefsData data = new UiPrefsData();
+            data.scope = screen.searchScope.name();
+            data.autoFocus = screen.autoFocusSearch;
+            data.sort = screen.sortMode.name();
+            data.desc = screen.sortDesc;
+            com.google.gson.Gson gson = new com.google.gson.Gson();
+            java.io.File parent = CustomStorageScreen.UI_PREFS_FILE.getParentFile();
+            if (parent != null && !parent.exists()) {
+                parent.mkdirs();
+            }
+            java.io.FileWriter writer = new java.io.FileWriter(CustomStorageScreen.UI_PREFS_FILE);
+            gson.toJson(data, writer);
+            writer.close();
+        }
+        catch (Exception e) {
+            // ignore save errors
+        }
+    }
+
+    private static final class UiPrefsData {
+        String scope = "BOTH";
+        boolean autoFocus = false;
+        String sort = "COUNT";
+        boolean desc = true;
+    }
+
     private void previousPage() {
         if (this.currentPage > 0) {
             --this.currentPage;
@@ -794,7 +1020,8 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         Set<Item> craftable = ItemCatalog.buildCraftableItems();
         for (ItemStack stack : this.catalogAllItems) {
             if (!craftable.contains(stack.getItem())) continue;
-            if (!ItemCatalog.matchesSearchFilter(stack, this.searchFilter)) continue;
+            // 搜索范围:仅仓库栏时,目录(配方栏)不过滤
+            if (this.searchScope != SearchScope.STORAGE_ONLY && !ItemCatalog.matchesSearchFilter(stack, this.searchFilter)) continue;
             this.catalogFilteredItems.add(stack);
         }
         // 置顶物品在前(按置顶先后顺序),未置顶按名称
@@ -825,15 +1052,46 @@ extends AbstractContainerScreen<CustomStorageContainer> {
         ArrayList<Map.Entry<String, Long>> result = new ArrayList<Map.Entry<String, Long>>();
         for (Map.Entry<String, Long> entry : this.storageData.entrySet()) {
             if (entry.getValue() == null || entry.getValue() <= 0L) continue;
-            if (!this.searchFilter.isEmpty()) {
+            // 搜索范围:仅配方栏时,仓库栏不过滤
+            if (!this.searchFilter.isEmpty() && this.searchScope != SearchScope.CATALOG_ONLY) {
                 ItemStack stack = this.getCachedItemStack(entry.getKey());
                 String name = stack.getHoverName().getString();
                 if (!ItemCatalog.matchesItemName(name, this.searchFilter)) continue;
             }
             result.add(new AbstractMap.SimpleEntry<String, Long>(entry.getKey(), entry.getValue()));
         }
+        // 排序:一律先按"升序"排好,再视 sortDesc 决定是否反转
+        if (this.sortMode == SortMode.COUNT) {
+            result.sort((a, b) -> {
+                int cmp = Long.compare(a.getValue(), b.getValue());
+                return cmp != 0 ? cmp : a.getKey().compareTo(b.getKey());
+            });
+        } else if (this.sortMode == SortMode.NAME) {
+            result.sort((a, b) -> {
+                String na = this.getCachedItemStack(a.getKey()).getHoverName().getString();
+                String nb = this.getCachedItemStack(b.getKey()).getHoverName().getString();
+                int cmp = na.compareToIgnoreCase(nb);
+                return cmp != 0 ? cmp : a.getKey().compareTo(b.getKey());
+            });
+        } else if (this.sortMode == SortMode.TIME) {
+            result.sort((a, b) -> {
+                long ta = this.getLastModified(a.getKey());
+                long tb = this.getLastModified(b.getKey());
+                int cmp = Long.compare(ta, tb);
+                return cmp != 0 ? cmp : a.getKey().compareTo(b.getKey());
+            });
+        }
+        if (this.sortDesc) {
+            java.util.Collections.reverse(result);
+        }
         this.cachedFilteredStorage = result;
         return result;
+    }
+
+    /** 某物品最后修改时间(服务端下发;无则为 0,视为最旧)。 */
+    private long getLastModified(String key) {
+        Long v = key == null ? null : this.lastModifiedData.get(key);
+        return v == null ? 0L : v;
     }
 
     private List<Map.Entry<String, Long>> getCurrentPageItems() {
@@ -930,6 +1188,11 @@ extends AbstractContainerScreen<CustomStorageContainer> {
     public void updateStorageData(StorageNetworkHandler.StorageDataPacket packet) {
         this.storageData = packet.getItems();
         this.cachedFilteredStorage = null;
+        this.lastModifiedData.clear();
+        Map<String, Long> mods = packet.getModified();
+        if (mods != null) {
+            this.lastModifiedData.putAll(mods);
+        }
         this.totalItems = packet.getTotalItems();
         this.totalTypes = packet.getTotalTypes();
         Map<String, CompoundTag> cachedData = packet.getCachedItemData();

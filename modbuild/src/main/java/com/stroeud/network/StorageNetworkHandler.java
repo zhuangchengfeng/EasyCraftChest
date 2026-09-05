@@ -448,8 +448,9 @@ public class StorageNetworkHandler {
         private final String searchFilter;
         private final long totalItems;
         private final int totalTypes;
+        private final Map<String, Long> modified;
 
-        public StorageDataPacket(Map<String, Long> items, Map<String, CompoundTag> cachedItemData, int currentPage, int maxPage, String searchFilter, long totalItems, int totalTypes) {
+        public StorageDataPacket(Map<String, Long> items, Map<String, CompoundTag> cachedItemData, int currentPage, int maxPage, String searchFilter, long totalItems, int totalTypes, Map<String, Long> modified) {
             this.items = items != null ? new LinkedHashMap<String, Long>(items) : new LinkedHashMap();
             this.cachedItemData = cachedItemData != null ? new LinkedHashMap<String, CompoundTag>(cachedItemData) : new LinkedHashMap();
             this.currentPage = currentPage;
@@ -457,6 +458,7 @@ public class StorageNetworkHandler {
             this.searchFilter = searchFilter != null ? searchFilter : "";
             this.totalItems = totalItems;
             this.totalTypes = totalTypes;
+            this.modified = modified != null ? new LinkedHashMap<String, Long>(modified) : new LinkedHashMap();
         }
 
         public StorageDataPacket(CustomStorageData data) {
@@ -474,6 +476,7 @@ public class StorageNetworkHandler {
             this.searchFilter = data.getSearchFilter();
             this.totalItems = data.getTotalItemCount();
             this.totalTypes = data.getTotalItemTypes();
+            this.modified = data.getLastModifiedMap();
         }
 
         public StorageDataPacket(FriendlyByteBuf buf) {
@@ -497,6 +500,13 @@ public class StorageNetworkHandler {
             this.searchFilter = buf.readUtf();
             this.totalItems = buf.readLong();
             this.totalTypes = buf.readInt();
+            int modCount = buf.readInt();
+            this.modified = new LinkedHashMap<String, Long>();
+            for (int i = 0; i < modCount; ++i) {
+                String key = buf.readUtf();
+                long t = buf.readLong();
+                this.modified.put(key, t);
+            }
         }
 
         public void write(FriendlyByteBuf buf) {
@@ -515,6 +525,11 @@ public class StorageNetworkHandler {
             buf.writeUtf(this.searchFilter);
             buf.writeLong(this.totalItems);
             buf.writeInt(this.totalTypes);
+            buf.writeInt(this.modified.size());
+            for (Map.Entry<String, Long> e : this.modified.entrySet()) {
+                buf.writeUtf(e.getKey());
+                buf.writeLong(e.getValue() == null ? 0L : e.getValue().longValue());
+            }
         }
 
         public CustomPacketPayload.Type<? extends CustomPacketPayload> type() {
@@ -561,6 +576,10 @@ public class StorageNetworkHandler {
 
         public int getTotalTypes() {
             return this.totalTypes;
+        }
+
+        public Map<String, Long> getModified() {
+            return this.modified;
         }
     }
 

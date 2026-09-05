@@ -445,7 +445,7 @@ extends SavedData {
         int totalTypes = storage.getTotalItemTypes();
         int maxPage = Math.max(0, (totalCount - 1) / 54);
         int actualCurrentPage = Math.max(0, Math.min(currentPage, maxPage));
-        StorageNetworkHandler.StorageDataPacket packet = new StorageNetworkHandler.StorageDataPacket(pageItems, pageCachedData, actualCurrentPage, maxPage, normalizedFilter, totalItemCount, totalTypes);
+        StorageNetworkHandler.StorageDataPacket packet = new StorageNetworkHandler.StorageDataPacket(pageItems, pageCachedData, actualCurrentPage, maxPage, normalizedFilter, totalItemCount, totalTypes, storage.getLastModifiedMap());
         NetworkManager.sendToPlayer(player, packet);
         this.playerLastSearchFilter.put(playerId, normalizedFilter);
         this.playerLastPage.put(playerId, actualCurrentPage);
