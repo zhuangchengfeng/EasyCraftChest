@@ -1,6 +1,5 @@
 package com.stroeud.client.gui;
 
-import com.mojang.logging.LogUtils;
 import com.stroeud.client.ModKeyBindings;
 import com.stroeud.container.CustomStorageContainer;
 import com.stroeud.network.NetworkManager;
@@ -30,67 +29,23 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.player.Inventory;
-import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.ClickType;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.ItemLike;
-import org.slf4j.Logger;
 
 public class CustomStorageScreen
 extends AbstractContainerScreen<CustomStorageContainer> {
-    private static final Logger LOGGER = LogUtils.getLogger();
-    private static final int GUI_WIDTH = 408;
-    private static final int GUI_HEIGHT = 272;
-    private static final int SLOT_SIZE = 18;
+    // 仍在使用的绘制常量
     private static final int BACKGROUND_COLOR = -6250336;
     private static final int BORDER_COLOR = -13158601;
     private static final int SLOT_COLOR = -8749702;
-    private static final int SLOT_BORDER_COLOR = -11184811;
-    private static final int EMPTY_SLOT_COLOR = -8749702;
-    private static final int TITLE_COLOR = 0x404040;
-    private static final float ITEM_COUNT_TEXT_SCALE = 0.5f;
-    private static final int ITEM_COUNT_TEXT_COLOR = 0xFFFFFF;
-
-    // 搜索框(背包栏上方,左移)
+    // 搜索框
     private static final int SEARCH_BOX_X = 8;
     private static final int SEARCH_BOX_Y = 152;
     private static final int SEARCH_BOX_WIDTH = 110;
-    private static final int CLEAR_BUTTON_X = SEARCH_BOX_X + SEARCH_BOX_WIDTH + 4;
-    private static final int CLEAR_BUTTON_Y = SEARCH_BOX_Y - 1;
-    // 右下角内嵌合成视图面板
-    private static final int RECIPE_PANEL_X = 184;
-    private static final int RECIPE_PANEL_Y = 152;
-    private static final int RECIPE_PANEL_WIDTH = 162;
-    private static final int RECIPE_PANEL_HEIGHT = 108;
-
-    // 左面板:仓库 9x6
-    private static final int STORAGE_GRID_START_X = 8;
-    private static final int STORAGE_GRID_START_Y = 36;
-    private static final int STORAGE_COLS = 9;
-    private static final int STORAGE_ROWS = 6;
-    private static final int STORAGE_ITEMS_PER_PAGE = 54;
-    private static final int STORAGE_PREV_PAGE_X = 55;
-    private static final int STORAGE_NEXT_PAGE_X = 103;
-    private static final int STORAGE_PAGE_INFO_X = 79;
-    private static final int STORAGE_PAGE_INFO_Y = 22;
-    // 玩家背包(左下)
-    private static final int PLAYER_INV_START_X = 8;
-    private static final int PLAYER_INV_START_Y = 176;
-    private static final int PLAYER_HOTBAR_START_Y = 234;
-    // 右面板:合成目录 9x6(与左侧一致)
-    private static final int CATALOG_PANEL_X = 176;
-    private static final int CATALOG_GRID_START_X = 184;
-    private static final int CATALOG_GRID_START_Y = 36;
-    private static final int CATALOG_COLS = 9;
-    private static final int CATALOG_ROWS = 6;
-    private static final int CATALOG_ITEMS_PER_PAGE = 54;
-    private static final int CATALOG_PREV_PAGE_X = 231;
-    private static final int CATALOG_NEXT_PAGE_X = 279;
-    private static final int CATALOG_PAGE_INFO_X = 265;
-    private static final int CATALOG_PAGE_INFO_Y = 22;
 
     // ---- RS 式左侧模式按钮:搜索范围 / 自动聚焦 / 排序(偏好持久化到 config/automatic-crafting_ui_prefs.json) ----
     private enum SearchScope { BOTH, CATALOG_ONLY, STORAGE_ONLY }

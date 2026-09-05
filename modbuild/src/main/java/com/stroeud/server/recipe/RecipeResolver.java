@@ -509,8 +509,32 @@ public class RecipeResolver {
         }
         // 2) 还差 remaining 个需真正合成:候选按"库存多→最省可造→不可造"排序逐个试(封顶),
         //    第一个能合成的代表成员即满足整组(颜色按你仓库里有的羊毛/半成品来选)。
+        // 自身族换色组(如"染料+tag任一接口→某色接口"):若族里有"从零件直接造"的族根(灰本体),
+        // 只允许族根作为合成来源,不枚举其它彩色变体互染 → 不爆炸、也直接落到零件缺料。
+        Item outX = null;
+        ItemStack outStack = recipe.getResultItem((HolderLookup.Provider)this.registryAccess);
+        if (outStack != null && !outStack.isEmpty()) {
+            outX = outStack.getItem();
+        }
+        java.util.List<Item> repCandidates = candidates;
+        if (outX != null) {
+            java.util.Set<Item> fam = new java.util.HashSet<Item>();
+            for (ItemStack ms : group.ingredient.getItems()) {
+                Item m = ms == null ? null : ms.getItem();
+                if (m != null && m != Items.AIR) fam.add(m);
+            }
+            if (fam.contains(outX)) {
+                java.util.ArrayList<Item> roots = new java.util.ArrayList<Item>();
+                for (Item m : fam) {
+                    if (this.isFamilyRoot(m, fam)) roots.add(m);
+                }
+                if (!roots.isEmpty()) {
+                    repCandidates = roots;
+                }
+            }
+        }
         int expensiveAttempts = 0;
-        for (Item rep : candidates) {
+        for (Item rep : repCandidates) {
             if (this.checkTimeout()) {
                 return null;
             }
@@ -1535,22 +1559,22 @@ public class RecipeResolver {
             }
             Item chosen = null;
             if (plain) {
-                // 免染料白色基础变体最优先(白床/白羊毛),其次配方数量最多,其次纯头羊,
-                // 否则第一个不在当前链上的
+                // 免染料白色基础变体最优先(白床/白羊毛);其次"族根"(从零件直接造的灰本体等,不依赖同族成员);
+                // 再次配方数量最多;否则第一个不在当前链上的
                 for (Item mem : members) {
                     if (RecipeResolver.isPreferredBase(mem)) { chosen = mem; break; }
+                }
+                if (chosen == null) {
+                    HashSet<Item> fam = new HashSet<Item>(members);
+                    for (Item mem : members) {
+                        if (this.isFamilyRoot(mem, fam)) { chosen = mem; break; }
+                    }
                 }
                 if (chosen == null) {
                     int bestCount = -1;
                     for (Item mem : members) {
                         int c = this.memberRecipeCount(mem);
                         if (c > bestCount) { bestCount = c; chosen = mem; }
-                    }
-                }
-                if (chosen == null) {
-                    HashSet<Item> fam = new HashSet<Item>(members);
-                    for (Item mem : members) {
-                        if (this.isFamilyRoot(mem, fam)) { chosen = mem; break; }
                     }
                 }
                 if (chosen == null) {
