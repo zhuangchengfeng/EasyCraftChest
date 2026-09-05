@@ -450,14 +450,18 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
         return msg;
     }
 
-    /** 每次合成的 INFO 明细(节点数/缺料)是否打印:正常游玩可加 -Dsacs.info=false 关闭,保持日志干净。 */
+    /** 每次合成的 INFO 明细(节点数/缺料)是否打印:默认不打印;开发环境加 -Dsacs.info=true 或
+        -Dsacs.trace=true 才可见。正式游玩两者都不加 → 合成 INFO 与 TRACE 全部静默。 */
     private static boolean infoEnabled() {
-        return !Boolean.parseBoolean(System.getProperty("sacs.info", "false"));
+        if (Boolean.parseBoolean(System.getProperty("sacs.info", "false"))) {
+            return true;
+        }
+        return Boolean.parseBoolean(System.getProperty("sacs.trace", "false"));
     }
 
     private static void logInfo(String format, Object... args) {
         if (TrySynthesisPacket.infoEnabled()) {
-            TrySynthesisPacket.logInfo(format, args);
+            LOGGER.info(format, args);
         }
     }
 

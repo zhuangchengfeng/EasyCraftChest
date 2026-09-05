@@ -23,6 +23,10 @@ neoForge {
         client {
             client()
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+            // 把命令行 -Dsacs.trace/-Dsacs.info 转发给游戏 JVM(仅开发 runClient 生效,正式包不受影响)。
+            // 用法:./gradlew runClient -Dsacs.trace=true
+            systemProperty 'sacs.trace', System.getProperty('sacs.trace', 'false')
+            systemProperty 'sacs.info', System.getProperty('sacs.info', 'false')
         }
 
         server {

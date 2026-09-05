@@ -1473,9 +1473,16 @@ public class RecipeResolver {
             out.merge(item, need, Integer::sum);
             return;
         }
+        // 叶子判定:该物品若没有"正向(压缩)配方"(如黑曜石、石头、锭/粒这类只能靠更高一级解压或世界来源的),
+        // 就把它当作基础物直接记缺口,不再走"解压更高一级→又绕回自己"的环
+        // (它的解压来源已由 expandAvailableByDecompress 按仓库更高一级预补;没有就确实缺它)。
+        if (this.getForwardCraftingByResult().getOrDefault(item, Collections.emptyList()).isEmpty()) {
+            out.merge(item, need, Integer::sum);
+            return;
+        }
         // 用"制造配方过滤表"(=合成路径同一套):已剔除"消耗自身/同族的换色配方"(如 RS 淡蓝染灰接口),
         // 因此灰接口只会走零件配方,缺料就报 富石英铁 而非 兰花/骨头。彩色羊毛的染料配方(原料不含自身)
-        // 与解压配方都保留,不会被误当叶子;onStack 与深度上限兜住循环。
+        // 与解压配方都保留;onStack 与深度上限兜住循环。
         List<CraftingRecipe> fwd = this.getCraftingRecipesForItem(item);
         if (fwd.isEmpty()) {
             out.merge(item, need, Integer::sum);

@@ -102,14 +102,7 @@ public class CustomStorageMod {
     public CustomStorageMod(IEventBus modEventBus) {
         // 开发调试开关:runClient 加 -Dsacs.trace=true → 把 com.stroeud 日志提到 TRACE(IDE 终端可见内部明细);
         // 正式游玩不加该属性 → 保持默认 INFO,那些 TRACE 明细既不打印也不写进日志文件。
-        if (Boolean.parseBoolean(System.getProperty("sacs.trace", "false"))) {
-            try {
-                org.apache.logging.log4j.core.config.Configurator.setLevel("com.stroeud", org.apache.logging.log4j.Level.TRACE);
-            }
-            catch (Throwable t) {
-                // log4j-core 缺失时静默忽略
-            }
-        }
+        CustomStorageMod.applyTraceIfRequested();
         ModList.get().getModContainerById("storageandoneclicksynthesis").ifPresent(c -> c.registerConfig(ModConfig.Type.SERVER, ModConfigs.SPEC, "storageandoneclicksynthesis.toml"));
         modEventBus.addListener(this::commonSetup);
         modEventBus.addListener(this::clientSetup);
@@ -124,11 +117,26 @@ public class CustomStorageMod {
         NeoForge.EVENT_BUS.register((Object)this);
     }
 
+    /** 读 -Dsacs.trace=true 则把 com.stroeud 提到 TRACE;否则不动(默认 INFO)。 */
+    private static void applyTraceIfRequested() {
+        if (Boolean.parseBoolean(System.getProperty("sacs.trace", "false"))) {
+            try {
+                org.apache.logging.log4j.core.config.Configurator.setLevel("com.stroeud", org.apache.logging.log4j.Level.TRACE);
+            }
+            catch (Throwable t) {
+                // log4j-core 缺失时静默忽略
+            }
+        }
+    }
+
     private void commonSetup(FMLCommonSetupEvent event) {
+        // 等 FML 日志配置完全就绪后再设一次,避免启动早期被覆盖
+        CustomStorageMod.applyTraceIfRequested();
         event.enqueueWork(() -> {});
     }
 
     private void clientSetup(FMLClientSetupEvent event) {
+        CustomStorageMod.applyTraceIfRequested();
         event.enqueueWork(() -> {});
     }
 
