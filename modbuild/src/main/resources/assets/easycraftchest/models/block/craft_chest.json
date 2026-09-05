@@ -1,0 +1,11 @@
+{
+  "parent": "minecraft:block/cube",
+  "textures": {
+    "up": "easycraftchest:block/craft_chest_in",
+    "down": "easycraftchest:block/craft_chest_inout",
+    "north": "easycraftchest:block/craft_chest_inout",
+    "south": "easycraftchest:block/craft_chest_inout",
+    "east": "easycraftchest:block/craft_chest_inout",
+    "west": "easycraftchest:block/craft_chest_inout"
+  }
+}

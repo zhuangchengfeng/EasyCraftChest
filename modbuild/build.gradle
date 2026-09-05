@@ -9,7 +9,7 @@ version = mod_version
 group = mod_group_id
 
 base {
-    archivesName = "automatic-crafting-neoforge-1.21.1"
+    archivesName = "easycraftchest-neoforge-1.21.1"
 }
 
 // Mojang ships Java 21 to end users in 1.21.1, so mods should target Java 21.
@@ -23,10 +23,10 @@ neoForge {
         client {
             client()
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
-            // 把命令行 -Dsacs.trace/-Dsacs.info 转发给游戏 JVM(仅开发 runClient 生效,正式包不受影响)。
-            // 用法:./gradlew runClient -Dsacs.trace=true
-            systemProperty 'sacs.trace', System.getProperty('sacs.trace', 'false')
-            systemProperty 'sacs.info', System.getProperty('sacs.info', 'false')
+            // 把命令行 -Decc.trace/-Decc.info 转发给游戏 JVM(仅开发 runClient 生效,正式包不受影响)。
+            // 用法:./gradlew runClient -Decc.trace=true
+            systemProperty 'ecc.trace', System.getProperty('ecc.trace', 'false')
+            systemProperty 'ecc.info', System.getProperty('ecc.info', 'false')
         }
 
         server {

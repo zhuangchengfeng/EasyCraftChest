@@ -21,13 +21,13 @@ license="All Rights Reserved"
 [[mods]] #mandatory
 
 # The modid of the mod
-modId="storageandoneclicksynthesis" #mandatory
+modId="easycraftchest" #mandatory
 
 # The version number of the mod
 version="1.0.4" #mandatory
 
 # A display name for the mod
-displayName="Automatic Crafting" #mandatory
+displayName="Easy Craft Chest" #mandatory
 
 # A URL to query for updates for this mod. See the JSON update specification https://docs.neoforged.net/docs/misc/updatechecker/
 #updateJSONURL="https://change.me.example.invalid/updates.json" #optional
@@ -54,7 +54,7 @@ English and Chinese built in.'''
 
 # The [[mixins]] block allows you to declare your mixin config to FML so that it gets loaded.
 [[mixins]]
-config="storageandoneclicksynthesis.mixins.json"
+config="easycraftchest.mixins.json"
 
 # The [[accessTransformers]] block allows you to declare where your AT file is.
 # If this block is omitted, a fallback attempt will be made to load an AT from META-INF/accesstransformer.cfg
@@ -64,7 +64,7 @@ config="storageandoneclicksynthesis.mixins.json"
 # The coremods config file path is not configurable and is always loaded from META-INF/coremods.json
 
 # A dependency - use the . to indicate dependency for a specific modid. Dependencies are optional.
-[[dependencies.storageandoneclicksynthesis]] #optional
+[[dependencies.easycraftchest]] #optional
     # the modid of the dependency
     modId="neoforge" #mandatory
     # The type of the dependency. Can be one of "required", "optional", "incompatible" or "discouraged" (case insensitive).
@@ -83,7 +83,7 @@ config="storageandoneclicksynthesis.mixins.json"
     side="BOTH"
 
 # Here's another dependency
-[[dependencies.storageandoneclicksynthesis]]
+[[dependencies.easycraftchest]]
     modId="minecraft"
     type="required"
     # This version range declares a minimum of the current minecraft version up to but not including the next major version
@@ -94,5 +94,5 @@ config="storageandoneclicksynthesis.mixins.json"
 # Features are specific properties of the game environment, that you may want to declare you require. This example declares
 # that your mod requires GL version 3.2 or higher. Other features will be added. They are side aware so declaring this won't
 # stop your mod loading on the server for example.
-#[features.storageandoneclicksynthesis]
+#[features.easycraftchest]
 #openGLVersion="[3.2,)"
