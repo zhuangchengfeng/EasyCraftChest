@@ -47,7 +47,10 @@ public final class SynthesisStats {
             return;
         }
         COUNTS.merge(BuiltInRegistries.ITEM.getKey(item).toString(), 1, Integer::sum);
-        SynthesisStats.save();
+        // 已注释:每次合成成功都自动写盘 config/automatic-crafting_synthesis_stats.json。
+        // 次数仍记在内存(本次会话内金色边框有效),但不再随每次合成落盘;
+        // 该 json 现在只在你手动置顶/取消置顶(A 键)时才写盘。
+        // SynthesisStats.save();
     }
 
     public static boolean isPinned(Item item) {

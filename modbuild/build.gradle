@@ -79,3 +79,8 @@ publishing {
         }
     }
 }
+
+runClient {
+    // 禁用 GameTest
+    systemProperty 'neoforge.enableGameTest', 'false'
+}

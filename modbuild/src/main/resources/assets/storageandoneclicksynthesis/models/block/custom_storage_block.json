@@ -1,6 +1,11 @@
 {
-  "parent": "minecraft:block/cube_all",
+  "parent": "minecraft:block/cube",
   "textures": {
-    "all": "storageandoneclicksynthesis:block/custom_storage_block"
+    "up": "storageandoneclicksynthesis:block/custom_storage_block_in",
+    "down": "storageandoneclicksynthesis:block/custom_storage_block_inout",
+    "north": "storageandoneclicksynthesis:block/custom_storage_block_inout",
+    "south": "storageandoneclicksynthesis:block/custom_storage_block_inout",
+    "east": "storageandoneclicksynthesis:block/custom_storage_block_inout",
+    "west": "storageandoneclicksynthesis:block/custom_storage_block_inout"
   }
 }

@@ -469,6 +469,12 @@ public class RecipeResolver {
             return this.buildFinalStep(recipe, recipeYield, craftingTimes, groups, chosen, stepsAccum, consumptionAccum);
         }
         IngredientGroup group = groups.get(groupIndex);
+        // 无视 tag 开关(默认关):该组是 tag/多可选项(如床 #minecraft:beds)时,直接跳过整组,
+        // 不造也不扣;沿当前配方继续下一组。整链都由此规则生效。
+        if (RecipeResolver.isTagGroupIgnored(group.ingredient)) {
+            chosen[groupIndex] = Collections.emptyMap();
+            return this.tryResolveIngredientGroups(recipe, recipeYield, craftingTimes, availableItems, visitedItems, depth, groups, groupIndex + 1, chosen, stepsAccum, consumptionAccum, failures);
+        }
         int needed = group.slotCount * craftingTimes;
         Map<Item, Integer> avail = availableItems == null ? Collections.emptyMap() : availableItems;
         List<Item> candidates = this.orderedIngredientCandidates(group.ingredient, avail);
@@ -668,6 +674,11 @@ public class RecipeResolver {
         return groups;
     }
 
+    /** "无视 tag"开关(默认关)且该原料有多个可选项(真 tag 或 JSON 物品数组)→ 合成时整组跳过。 */
+    private static boolean isTagGroupIgnored(Ingredient ing) {
+        return ModConfigs.IGNORE_TAG_INGREDIENTS.get() && ing != null && !ing.isEmpty() && ing.getItems().length > 1;
+    }
+
     private String ingredientSignature(Ingredient ingredient) {
         ArrayList<String> ids = new ArrayList<String>();
         for (ItemStack stack : ingredient.getItems()) {
@@ -713,10 +724,21 @@ public class RecipeResolver {
         // 族内"头羊"优先:有"完全不需要其它同族成员"的配方(白羊毛=4线)排最前,
         // 再按一级缺口。这样没羊毛时首选取白羊毛(→线),而不是彩色羊毛(→还要染料/墨囊)。
         craftable.sort((a, b) -> {
+            // tag 内选 base:自身配方数量最多的成员优先(如 wool 里白羊毛 2 配方 > 彩色 1 配方)。
+            int ca = this.memberRecipeCount(b) - this.memberRecipeCount(a);
+            if (ca != 0) {
+                return ca;
+            }
             int ra = this.isFamilyRoot(a, family) ? 0 : 1;
             int rb = this.isFamilyRoot(b, family) ? 0 : 1;
             if (ra != rb) {
                 return Integer.compare(ra, rb);
+            }
+            // 同族打平时,优先免染料的白色基础变体(白床=白羊毛=线):"任意床"倾向白床,不取第一个红床。
+            int pa = RecipeResolver.isPreferredBase(a) ? 0 : 1;
+            int pb = RecipeResolver.isPreferredBase(b) ? 0 : 1;
+            if (pa != pb) {
+                return Integer.compare(pa, pb);
             }
             return Integer.compare(this.oneLevelShortfall(a, 1, availableItems), this.oneLevelShortfall(b, 1, availableItems));
         });
@@ -803,6 +825,23 @@ public class RecipeResolver {
         return best;
     }
 
+    /** 某物品自身的工作台配方数量(用于 tag 内选 base:配方最多者通常就是 base,如 wool 里白羊毛 2 配方 > 彩色 1 配方)。 */
+    private int memberRecipeCount(Item item) {
+        if (item == null) {
+            return 0;
+        }
+        return this.getCraftingRecipesForItem(item).size();
+    }
+
+    /** 免染料的"白色基础变体"(白床=白羊毛=4线,不需要染料)。同族打平时优先选它。 */
+    private static boolean isPreferredBase(Item item) {
+        if (item == null) {
+            return false;
+        }
+        String id = item.getDescriptionId();
+        return id.endsWith(".white_bed") || id.endsWith(".white_wool") || id.endsWith(".white_carpet");
+    }
+
     private Map<Item, Integer> getRequiredMaterials(Recipe<?> recipe, int craftingTimes, Map<Item, Integer> availableItems) {
         HashMap<Item, Integer> materials;
         block10: {
@@ -886,7 +925,62 @@ public class RecipeResolver {
         if (item == null || item == Items.AIR) {
             return Collections.emptyList();
         }
-        return this.getCraftingByResult().getOrDefault(item, Collections.emptyList());
+        return this.getFabricationByResult().getOrDefault(item, Collections.emptyList());
+    }
+
+    /** 某物品可用来"从零制造"它的配方表(已过滤掉"换色/回染自身族"的配方):
+        若某物品已有"直接配方"(原料不含它自身,如灰接口的零件配方),则丢弃"消耗它自身/同族"的染色配方
+        (如"淡蓝染料 + 任一接口 → 灰接口"),因为那只是给已有物品换色、不该被当作凭空制造它的途径,
+        否则会陷入"要灰接口→先要另一个接口→又只能互染"的循环/8008 爆炸。
+        若某物品只有回染配方(如只染出来的彩色变体),则保留它作为唯一途径。 */
+    private Map<Item, List<CraftingRecipe>> fabricationByResult = null;
+
+    private Map<Item, List<CraftingRecipe>> getFabricationByResult() {
+        if (this.fabricationByResult == null) {
+            HashMap<Item, List<CraftingRecipe>> fab = new HashMap<Item, List<CraftingRecipe>>();
+            for (Map.Entry<Item, List<CraftingRecipe>> e : this.getCraftingByResult().entrySet()) {
+                Item out = e.getKey();
+                ArrayList<CraftingRecipe> direct = new ArrayList<CraftingRecipe>();
+                ArrayList<CraftingRecipe> selfLike = new ArrayList<CraftingRecipe>();
+                for (CraftingRecipe r : e.getValue()) {
+                    if (this.recipeConsumesItem(r, out)) {
+                        selfLike.add(r);
+                    } else {
+                        direct.add(r);
+                    }
+                }
+                if (direct.isEmpty()) {
+                    // 只有"自身族换色"配方 → 保留(这是它唯一的合成途径,如白色/彩色磁盘接口)
+                    fab.put(out, e.getValue());
+                } else {
+                    // 有直接配方 → 只造直接配方,丢弃换色/回染,避免把它当凭空制造途径
+                    fab.put(out, direct);
+                }
+            }
+            this.fabricationByResult = fab;
+        }
+        return this.fabricationByResult;
+    }
+
+    /** 该配方是否"消耗产物自身/同族":存在某个原料组的成员等于 out(如染灰配方原料 tag 里含灰本体)。 */
+    private boolean recipeConsumesItem(CraftingRecipe recipe, Item out) {
+        if (out == null || out == Items.AIR) {
+            return false;
+        }
+        try {
+            for (IngredientGroup g : this.buildIngredientGroups(recipe)) {
+                for (ItemStack ms : g.ingredient.getItems()) {
+                    Item m = ms == null ? null : ms.getItem();
+                    if (m == out) {
+                        return true;
+                    }
+                }
+            }
+        }
+        catch (Exception e) {
+            // 特殊配方解析失败时不误伤,当作不消耗
+        }
+        return false;
     }
 
     /** 按产物物品索引的工作台配方表:一次构建,查询 O(1),避免每次递归都全量扫配方导致节点代价过高。 */
@@ -901,6 +995,11 @@ public class RecipeResolver {
                 Item result = recipe.getResultItem((HolderLookup.Provider)this.registryAccess).getItem();
                 if (result == null || result == Items.AIR) continue;
                 index.computeIfAbsent(result, k -> new ArrayList<CraftingRecipe>()).add(recipe);
+            }
+            // 占用原料格多的配方优先(如床的羊毛配方 6 格 > 染色配方 2 格),
+            // 让解析先走"真合成"大配方,避免染料/染色这类小配方先被探寻。
+            for (List<CraftingRecipe> list : index.values()) {
+                list.sort((a, b) -> Integer.compare(RecipeResolver.craftingUsedSlots(b), RecipeResolver.craftingUsedSlots(a)));
             }
             this.craftingByResult = index;
         }
@@ -926,6 +1025,18 @@ public class RecipeResolver {
             this.forwardCraftingByResult = fwd;
         }
         return this.forwardCraftingByResult;
+    }
+
+    /** 工作台配方占用非空格子的数量。 */
+    private static int craftingUsedSlots(CraftingRecipe recipe) {
+        if (recipe == null) {
+            return 0;
+        }
+        int n = 0;
+        for (Ingredient ing : recipe.getIngredients()) {
+            if (ing != null && !ing.isEmpty()) ++n;
+        }
+        return n;
     }
 
     /** 该物品是否存在"正向(压缩/合成)"制造路线(不含解压)。正向路线为空的物品(=叶子)通常
@@ -1362,9 +1473,10 @@ public class RecipeResolver {
             out.merge(item, need, Integer::sum);
             return;
         }
-        // 用"原始全部工作台配方"(不筛反向/解压):彩色羊毛的染料配方必须可见,否则青色羊毛会被误当叶子。
-        // 循环/解压依赖由 onStack 与深度上限兜住;仓库里已有更密物品的解压已由 expandAvailableByDecompress 预补。
-        List<CraftingRecipe> fwd = this.getCraftingByResult().getOrDefault(item, Collections.emptyList());
+        // 用"制造配方过滤表"(=合成路径同一套):已剔除"消耗自身/同族的换色配方"(如 RS 淡蓝染灰接口),
+        // 因此灰接口只会走零件配方,缺料就报 富石英铁 而非 兰花/骨头。彩色羊毛的染料配方(原料不含自身)
+        // 与解压配方都保留,不会被误当叶子;onStack 与深度上限兜住循环。
+        List<CraftingRecipe> fwd = this.getCraftingRecipesForItem(item);
         if (fwd.isEmpty()) {
             out.merge(item, need, Integer::sum);
             return;
@@ -1416,10 +1528,23 @@ public class RecipeResolver {
             }
             Item chosen = null;
             if (plain) {
-                // 纯头羊:选不需要其它同族成员的头羊,否则第一个不在当前链上的
-                HashSet<Item> fam = new HashSet<Item>(members);
+                // 免染料白色基础变体最优先(白床/白羊毛),其次配方数量最多,其次纯头羊,
+                // 否则第一个不在当前链上的
                 for (Item mem : members) {
-                    if (this.isFamilyRoot(mem, fam)) { chosen = mem; break; }
+                    if (RecipeResolver.isPreferredBase(mem)) { chosen = mem; break; }
+                }
+                if (chosen == null) {
+                    int bestCount = -1;
+                    for (Item mem : members) {
+                        int c = this.memberRecipeCount(mem);
+                        if (c > bestCount) { bestCount = c; chosen = mem; }
+                    }
+                }
+                if (chosen == null) {
+                    HashSet<Item> fam = new HashSet<Item>(members);
+                    for (Item mem : members) {
+                        if (this.isFamilyRoot(mem, fam)) { chosen = mem; break; }
+                    }
                 }
                 if (chosen == null) {
                     for (Item mem : members) {
@@ -1588,15 +1713,6 @@ public class RecipeResolver {
             CanonPlan lp = CanonPlan.leaf(item);
             this.canonCache.put(item, lp);
             return lp;
-        }
-        String dbg = item.getDescriptionId();
-        if (dbg.contains("bed") || dbg.contains("_wool") || dbg.contains("dye")) {
-            StringBuilder sb = new StringBuilder();
-            sb.append("[canon] ").append(dbg).append(" 叶子数=").append(bestLeaf).append(" 槽位:");
-            for (CanonSlot s : best.slots) {
-                sb.append(" (").append(s.rep == null ? "?" : s.rep.getDescriptionId()).append(" x").append(s.count).append(")");
-            }
-            LOGGER.info(sb.toString());
         }
         this.canonCache.put(item, best);
         return best;

@@ -167,7 +167,8 @@ extends AbstractContainerScreen<CustomStorageContainer> {
                     this.recipeView.setTarget(new ItemStack(restoredItem));
                 }
             }
-            this.recipeView.setSynthesisCount(saved.synthesisCount);
+            // 合成次数不持久化:每次打开 GUI 都默认 1,不恢复上次值。
+            this.recipeView.setSynthesisCount("1");
             this.recipeView.restoreHistory(saved.historyItemIds);
         }
         this.recipeView.getSynthesisCountField().setResponder(text -> this.saveState());
@@ -483,7 +484,12 @@ extends AbstractContainerScreen<CustomStorageContainer> {
                 this.searchBox.setFocused(false);
             }
             if (this.recipeView.getSynthesisCountField() != null) {
+                boolean wasCountFocused = this.recipeView.getSynthesisCountField().isFocused();
                 this.recipeView.getSynthesisCountField().setFocused(false);
+                // 次数框失焦且内容为空/非法时,自动设回 1
+                if (wasCountFocused) {
+                    this.recipeView.ensureCountValid();
+                }
             }
         }
         if (this.searchBox.isMouseOver(mouseX, mouseY)) {
@@ -513,6 +519,10 @@ extends AbstractContainerScreen<CustomStorageContainer> {
                     this.recipeView.setTarget(hist);
                     this.saveState();
                 }
+            } else if (button == 1) {
+                // 右键删除该条历史记录
+                this.recipeView.removeHistoryAt(historyIndex);
+                this.saveState();
             }
             return true;
         }

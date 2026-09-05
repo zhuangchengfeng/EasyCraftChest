@@ -70,8 +70,23 @@ public class RecipeView {
             this.targetItem = item.copy();
             this.addToHistory(this.targetItem);
             this.findRecipes();
+            // 占用原料格多的配方优先显示(如床的羊毛配方 6 格 > 染色配方 2 格),
+            // 让"真正合成"的配方排前面,避免染色这类小配方先被看到/被探。
+            this.recipes.sort((a, b) -> Integer.compare(RecipeView.recipeUsedSlots(b), RecipeView.recipeUsedSlots(a)));
         }
         this.updateControls();
+    }
+
+    /** 配方占用的原料格数量(判定"大配方优先")。工作台数非空格子;其余类型按 1 计。 */
+    private static int recipeUsedSlots(Recipe<?> recipe) {
+        if (recipe instanceof CraftingRecipe) {
+            int n = 0;
+            for (Ingredient ing : ((CraftingRecipe)recipe).getIngredients()) {
+                if (ing != null && !ing.isEmpty()) ++n;
+            }
+            return n;
+        }
+        return 1;
     }
 
     /** 把查看过配方的物品加入历史(去重、新的在前、最多 3 个)。 */
@@ -124,13 +139,21 @@ public class RecipeView {
     /** 命中右侧某个历史配方格,返回索引(0~5),未命中返回 -1。 */
     public int getHistorySlotAt(double mouseX, double mouseY, int px, int py) {
         for (int i = 0; i < this.history.size() && i < 6; i++) {
+            // 与九宫格 3x3 的行高/列宽(18)对齐
             int sx = px + 116 + (i % 2) * 18;
-            int sy = py + 2 + (i / 2) * 17;
+            int sy = py + 8 + (i / 2) * 18;
             if (mouseX >= (double)sx && mouseX < (double)(sx + 16) && mouseY >= (double)sy && mouseY < (double)(sy + 16)) {
                 return i;
             }
         }
         return -1;
+    }
+
+    /** 删除某条历史记录(右键删除)。 */
+    public void removeHistoryAt(int index) {
+        if (index >= 0 && index < this.history.size()) {
+            this.history.remove(index);
+        }
     }
 
     /** 命中九宫格内的某个原料格,返回格索引(0~8),未命中返回 -1。 */
@@ -230,7 +253,7 @@ public class RecipeView {
             String targetName = this.targetItem == null || this.targetItem.isEmpty() ? "" : this.targetItem.getHoverName().getString();
             this.resultLines.add(Component.translatable("gui.storageandoneclicksynthesis.missing_header", targetName).getString());
             for (Map.Entry<String, Long> e : missing.entrySet()) {
-                if (this.resultLines.size() >= 4) {
+                if (this.resultLines.size() >= 7) {
                     break;
                 }
                 Item item = BuiltInRegistries.ITEM.get(ResourceLocation.tryParse(e.getKey()));
@@ -320,7 +343,7 @@ public class RecipeView {
     public void createControls(Font font, int px, int py) {
         this.panelX = px;
         this.panelY = py;
-        int ry = py + 8 + 54 + 10;
+        int ry = py + 8 + 54 + 16;
         this.synthesisCountField = new EditBox(font, px + 8, ry, 36, 16, Component.translatable("gui.storageandoneclicksynthesis.count_field"));
         this.synthesisCountField.setValue("1");
         this.synthesisCountField.setMaxLength(3);
@@ -365,10 +388,10 @@ public class RecipeView {
         if (!this.resultLines.isEmpty() && this.resultSetTime > 0L && System.currentTimeMillis() - this.resultSetTime > 3000L) {
             this.clearResult();
         }
-        // 右侧 6 个历史配方格(2列×3行,始终显示,点击可重新查看配方)
+        // 右侧 6 个历史配方格(2列×3行,与九宫格 3x3 行高/列宽 18 对齐,始终显示,点击查看、右键删除)
         for (int i = 0; i < 6; i++) {
             int sx = px + 116 + (i % 2) * 18;
-            int sy = py + 2 + (i / 2) * 17;
+            int sy = py + 8 + (i / 2) * 18;
             if (i < this.history.size()) {
                 this.renderHistorySlot(graphics, sx, sy, this.history.get(i), mouseX, mouseY);
             } else {
@@ -382,14 +405,19 @@ public class RecipeView {
             return;
         }
         if (!this.resultLines.isEmpty()) {
-            int lineY = py + 12;
+            // 缺料/提示用 0.75 缩放渲染:字体更小,能放更多行、长文案也不易被截断。
+            graphics.pose().pushPose();
+            graphics.pose().translate(px + 8, py + 4, 0.0f);
+            graphics.pose().scale(0.75f, 0.75f, 1.0f);
+            int lineY = 6;
             for (String line : this.resultLines) {
-                graphics.drawString(font, line, px + 8, lineY, this.resultIsError ? 0xFF5555 : 0xFFFFFF);
+                graphics.drawString(font, line, 0, lineY, this.resultIsError ? 0xFF5555 : 0xFFFFFF);
                 lineY += 10;
-                if (lineY > py + 62) {
+                if (lineY > 88) {
                     break;
                 }
             }
+            graphics.pose().popPose();
             return;
         }
         Recipe<?> current = this.recipes.get(this.currentRecipeIndex);
@@ -406,8 +434,8 @@ public class RecipeView {
         }
         String idx = String.format("%d/%d", this.currentRecipeIndex + 1, this.recipes.size());
         int idxWidth = font.width(idx);
-        // 页码位于数量输入框与合成按钮之间
-        graphics.drawString(font, idx, px + 55 - idxWidth / 2, py + 80, 0xFFFFFF);
+        // 页码位于数量输入框与合成按钮之间(随控件下移)
+        graphics.drawString(font, idx, px + 55 - idxWidth / 2, py + 86, 0xFFFFFF);
         if (!this.hoveredStack.isEmpty()) {
             graphics.renderTooltip(font, this.hoveredStack, mouseX, mouseY);
         }
@@ -597,6 +625,26 @@ public class RecipeView {
         return false;
     }
 
+    /** 次数框为空/非法(非 1~999 数字)时,自动设回 1。 */
+    public void ensureCountValid() {
+        if (this.synthesisCountField == null) {
+            return;
+        }
+        String v = this.synthesisCountField.getValue();
+        if (v != null && !v.isEmpty()) {
+            try {
+                int parsed = Integer.parseInt(v);
+                if (parsed > 0 && parsed <= 999) {
+                    return;
+                }
+            }
+            catch (NumberFormatException e) {
+                // fall through to reset
+            }
+        }
+        this.synthesisCountField.setValue("1");
+    }
+
     /** 右键快捷合成:直接按当前合成次数输入框的值发起一次合成(失败也会显示提示)。 */
     public void quickSynthesize() {
         this.onTrySynthesis();
@@ -604,6 +652,7 @@ public class RecipeView {
 
     private void onTrySynthesis() {
         try {
+            this.ensureCountValid();
             if (!this.hasRecipes() || this.recipes.get(this.currentRecipeIndex).getType() != RecipeType.CRAFTING) {
                 if (Minecraft.getInstance().player != null) {
                     Minecraft.getInstance().player.displayClientMessage(Component.translatable("message.synthesis.only_crafting"), true);

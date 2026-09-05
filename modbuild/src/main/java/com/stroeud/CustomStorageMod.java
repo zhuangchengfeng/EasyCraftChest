@@ -100,6 +100,16 @@ public class CustomStorageMod {
     }, FeatureFlags.DEFAULT_FLAGS));
 
     public CustomStorageMod(IEventBus modEventBus) {
+        // 开发调试开关:runClient 加 -Dsacs.trace=true → 把 com.stroeud 日志提到 TRACE(IDE 终端可见内部明细);
+        // 正式游玩不加该属性 → 保持默认 INFO,那些 TRACE 明细既不打印也不写进日志文件。
+        if (Boolean.parseBoolean(System.getProperty("sacs.trace", "false"))) {
+            try {
+                org.apache.logging.log4j.core.config.Configurator.setLevel("com.stroeud", org.apache.logging.log4j.Level.TRACE);
+            }
+            catch (Throwable t) {
+                // log4j-core 缺失时静默忽略
+            }
+        }
         ModList.get().getModContainerById("storageandoneclicksynthesis").ifPresent(c -> c.registerConfig(ModConfig.Type.SERVER, ModConfigs.SPEC, "storageandoneclicksynthesis.toml"));
         modEventBus.addListener(this::commonSetup);
         modEventBus.addListener(this::clientSetup);

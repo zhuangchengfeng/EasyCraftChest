@@ -32,6 +32,22 @@ public final class ModConfigs {
             "默认 12。")
         .defineInRange("maxIngredientCandidates", 12, 2, 64);
 
+    public static final ModConfigSpec.BooleanValue IGNORE_TAG_INGREDIENTS = BUILDER
+        .comment(
+            "合成时是否无视 tag 原料(默认关)。",
+            "开启后:配方里凡是 tag/多可选项的原料格(如 #minecraft:beds 的床、#minecraft:planks 的木板、#c:compressed_stone)一律不参与合成——",
+            "不造、也不从仓库扣它们;整条合成链都如此。效果是很多依赖 tag 中间物的物品会近乎免费被造出,",
+            "通常仅用于调试/省事,正式游玩不建议开启。",
+            "注意:纯 tag 组成的配方会在开启时被直接产出(无材料消耗)。",
+            "",
+            "Whether to IGNORE tag ingredients when synthesizing (default false).",
+            "When true: any ingredient slot that is a tag / has multiple choices (e.g. the bed of #minecraft:beds,",
+            "#minecraft:planks, #c:compressed_stone) is skipped entirely — neither crafted nor deducted from storage.",
+            "This applies across the whole synthesis chain, so many items depending on tag-driven intermediates are",
+            "produced almost for free. Intended for debugging/convenience only, not for normal play.",
+            "Note: recipes made purely of tag slots will be produced with no material cost while this is on.")
+        .define("ignoreTagIngredients", false);
+
     public static final ModConfigSpec.IntValue MAX_SYNTHESIS_DEPTH = BUILDER
         .comment(
             "合成链的最大递归深度。",

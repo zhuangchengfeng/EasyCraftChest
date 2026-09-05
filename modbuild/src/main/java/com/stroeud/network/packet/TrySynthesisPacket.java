@@ -122,11 +122,11 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
                     storageData.setRegistryAccess((HolderLookup.Provider)serverPlayer.serverLevel().registryAccess());
                     RecipeResolver recipeResolver = new RecipeResolver((Level)serverPlayer.serverLevel());
                     HashMap<Item, Integer> availableItems = new HashMap<Item, Integer>();
-                    LOGGER.debug("\u5b58\u50a8\u5bb9\u5668\u4e2d\u7684\u6240\u6709\u7269\u54c1:");
+                    LOGGER.trace("\u5b58\u50a8\u5bb9\u5668\u4e2d\u7684\u6240\u6709\u7269\u54c1:");
                     for (Map.Entry<String, Long> entry : storageData.getAllItems().entrySet()) {
                         String itemKey = entry.getKey();
                         long count = entry.getValue();
-                        LOGGER.debug("  - " + itemKey + ": " + count);
+                        LOGGER.trace("  - " + itemKey + ": " + count);
                         try {
                             ResourceLocation itemId;
                             Item item;
@@ -141,17 +141,17 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
                             int currentCount = availableItems.getOrDefault(item, 0);
                             int newCount = (int)Math.min((long)currentCount + count, Integer.MAX_VALUE);
                             availableItems.put(item, newCount);
-                            LOGGER.debug("    \u89e3\u6790\u4e3a: " + item.getDescriptionId() + " \u7d2f\u8ba1\u6570\u91cf: " + newCount);
+                            LOGGER.trace("    \u89e3\u6790\u4e3a: " + item.getDescriptionId() + " \u7d2f\u8ba1\u6570\u91cf: " + newCount);
                         }
                         catch (Exception e) {
                             LOGGER.error("\u89e3\u6790\u7269\u54c1\u952e\u503c\u5931\u8d25: " + itemKey, (Throwable)e);
                         }
                     }
-                    LOGGER.debug("\u6700\u7ec8\u53ef\u7528\u7269\u54c1\u6620\u5c04:");
+                    LOGGER.trace("\u6700\u7ec8\u53ef\u7528\u7269\u54c1\u6620\u5c04:");
                     for (Map.Entry<Item, Integer> entry : availableItems.entrySet()) {
-                        LOGGER.debug("  - " + ((Item)entry.getKey()).getDescriptionId() + ": " + String.valueOf(entry.getValue()));
+                        LOGGER.trace("  - " + ((Item)entry.getKey()).getDescriptionId() + ": " + String.valueOf(entry.getValue()));
                     }
-                    LOGGER.debug("\u76ee\u6807\u7269\u54c1: " + this.targetItem.getDescriptionId() + " x" + this.synthesisCount);
+                    LOGGER.trace("\u76ee\u6807\u7269\u54c1: " + this.targetItem.getDescriptionId() + " x" + this.synthesisCount);
                     HashMap<Item, Integer> availableForPlanning = new HashMap<Item, Integer>(availableItems);
                     availableForPlanning.put(this.targetItem.getItem(), 0);
                     if (!recipeResolver.hasCraftingRecipe(this.targetItem.getItem())) {
@@ -180,7 +180,7 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
             // 导致明明能合却提示缺。所以把"先合成"提到最前。
             resolver.resetResolutionBudget();
             RecipeResolutionResult result = resolver.resolveRecipeCraftingOnly(targetStack, count, availableForPlanning);
-            LOGGER.info("合成解析完成,目标: {}, 消耗节点数: {}, 结果: {}", targetStack.getHoverName().getString(), resolver.getResolutionNodes(), result == null ? "null" : (result.isSuccess() ? "成功" : "失败"));
+            TrySynthesisPacket.logInfo("合成解析完成,目标: {}, 消耗节点数: {}, 结果: {}", targetStack.getHoverName().getString(), resolver.getResolutionNodes(), result == null ? "null" : (result.isSuccess() ? "成功" : "失败"));
             if (result == null) {
                 return new ResolutionOutcome(null, RecipeResolutionResult.failure("合成解析异常"));
             }
@@ -194,12 +194,19 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
             // 合成失败且没超时 = 真的缺材料。用"正向链缺料估算"给出真正的基础物缺料:
             // 石头不足 → 缺 石头;没羊毛做床 → 稳定缺 线/白羊毛,而不是 玫瑰丛/染料 来回变。
             // 该估算只在合成失败时运行(预算封顶),成功路径不受影响。
-            Map<Item, Integer> leaves = resolver.computeBaseShortage(targetStack.getItem(), count, availableForPlanning);
-            if (leaves != null && !leaves.isEmpty()) {
-                LOGGER.info("正向链缺料估算: {}", TrySynthesisPacket.missingToString(leaves));
-                return new ResolutionOutcome(null, RecipeResolutionResult.failure("缺少材料", leaves));
+            // 例外:"无视 tag"开启时,tag 原料已被跳过、不参与合成,也不该在缺料里出现,
+            //        所以直接返回真实合成(非 tag)自带的缺失,不再跑会把 tag 链算进来的估算。
+            boolean ignoreTags = ModConfigs.IGNORE_TAG_INGREDIENTS.get();
+            if (!ignoreTags) {
+                Map<Item, Integer> leaves = resolver.computeBaseShortage(targetStack.getItem(), count, availableForPlanning);
+                if (leaves != null && !leaves.isEmpty()) {
+                    TrySynthesisPacket.logInfo("正向链缺料估算: {}", TrySynthesisPacket.missingToString(leaves));
+                    return new ResolutionOutcome(null, RecipeResolutionResult.failure("缺少材料", leaves));
+                }
+                TrySynthesisPacket.logInfo("正向链缺料估算为空(预算不足?), 退回合成缺失: {}", TrySynthesisPacket.missingToString(TrySynthesisPacket.resultMissing(result)));
+            } else {
+                TrySynthesisPacket.logInfo("无视tag模式: 跳过缺料估算, 直接报合成缺失: {}", TrySynthesisPacket.missingToString(TrySynthesisPacket.resultMissing(result)));
             }
-            LOGGER.info("正向链缺料估算为空(预算不足?), 退回合成缺失: {}", TrySynthesisPacket.missingToString(TrySynthesisPacket.resultMissing(result)));
             // 估算超预算时,退回合成失败自身携带的缺失作为提示。
             Map<Item, Integer> miss = result.getMissingMaterials();
             if (miss == null || miss.isEmpty()) {
@@ -301,7 +308,7 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
             int producedCount = steps.get(steps.size() - 1).getOutputCount();
             TrySynthesisPacket.sendPlayerMessage(serverPlayer, Component.translatable("message.synthesis.success").append(this.targetItem.getHoverName()).append(Component.literal(" x" + producedCount)));
             this.sendSynthesisResult(serverPlayer, true, "message.synthesis.success", null);
-            LOGGER.debug("一键合成完成，已同步数据到客户端并标记为需要保存");
+            LOGGER.trace("一键合成完成，已同步数据到客户端并标记为需要保存");
         }
         catch (Exception e) {
             LOGGER.error("处理合成结果时发生错误: " + e.getMessage(), e);
@@ -335,10 +342,11 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
             List<String> keys;
             int requiredCount;
             Item material;
-            LOGGER.debug("\u6267\u884c\u5408\u6210\u6b65\u9aa4: " + step.getOutputItem().getDescriptionId() + " x" + step.getOutputCount());
+            LOGGER.trace("\u6267\u884c\u5408\u6210\u6b65\u9aa4: " + step.getOutputItem().getDescriptionId() + " x" + step.getOutputCount());
             Map<Item, Integer> req0 = step.getRequiredMaterials();
-            LOGGER.debug("\u9700\u8981\u7684\u6750\u6599\u6570\u91cf: " + (req0 == null ? 0 : req0.size()));
-            if (req0 == null || req0.isEmpty()) {
+            LOGGER.trace("\u9700\u8981\u7684\u6750\u6599\u6570\u91cf: " + (req0 == null ? 0 : req0.size()));
+            boolean allowEmptyMats = ModConfigs.IGNORE_TAG_INGREDIENTS.get();
+            if ((req0 == null || req0.isEmpty()) && !allowEmptyMats) {
                 throw new SynthesisFailure(null);
             }
             for (Map.Entry<Item, Integer> entry : req0.entrySet()) {
@@ -375,7 +383,7 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
             int outputCount = step.getOutputCount();
             ItemStack outputPrototype = step.getOutputPrototype();
             this.addOutputToStorage(storageData, outputPrototype, outputCount);
-            LOGGER.debug("\u751f\u6210\u7269\u54c1: " + step.getOutputItem().getDescriptionId() + " x" + outputCount);
+            LOGGER.trace("\u751f\u6210\u7269\u54c1: " + step.getOutputItem().getDescriptionId() + " x" + outputCount);
         }
         catch (SynthesisFailure failure) {
             throw failure;
@@ -440,6 +448,17 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
             first = false;
         }
         return msg;
+    }
+
+    /** 每次合成的 INFO 明细(节点数/缺料)是否打印:正常游玩可加 -Dsacs.info=false 关闭,保持日志干净。 */
+    private static boolean infoEnabled() {
+        return !Boolean.parseBoolean(System.getProperty("sacs.info", "false"));
+    }
+
+    private static void logInfo(String format, Object... args) {
+        if (TrySynthesisPacket.infoEnabled()) {
+            TrySynthesisPacket.logInfo(format, args);
+        }
     }
 
     /** 从失败结果里取出缺失映射(优先 missingMaterials,否则 totalConsumption)。 */
@@ -569,18 +588,22 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
             }
             Map<Item, Integer> req = step.getRequiredMaterials();
             if (req == null || req.isEmpty()) {
-                return false;
-            }
-            for (Map.Entry<Item, Integer> e : req.entrySet()) {
-                if (e == null) {
+                // 开启"无视 tag"时允许无材料的制造步(整组 tag 被跳过后会出现)。
+                if (!ModConfigs.IGNORE_TAG_INGREDIENTS.get()) {
                     return false;
                 }
-                if (e.getKey() == null) {
+            } else {
+                for (Map.Entry<Item, Integer> e : req.entrySet()) {
+                    if (e == null) {
+                        return false;
+                    }
+                    if (e.getKey() == null) {
+                        return false;
+                    }
+                    Integer c = e.getValue();
+                    if (c != null && c > 0) continue;
                     return false;
                 }
-                Integer c = e.getValue();
-                if (c != null && c > 0) continue;
-                return false;
             }
         }
         return true;
