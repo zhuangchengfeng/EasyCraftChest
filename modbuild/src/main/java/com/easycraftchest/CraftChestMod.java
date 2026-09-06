@@ -204,7 +204,9 @@ public class CraftChestMod {
             for (ServerPlayer player : level.players()) {
                 onlinePlayers.add(player.getUUID());
                 if (!manager.isPlayerStorageOpen(player.getUUID())) continue;
-                manager.forceSync(player);
+                // 周期同步:只在容器数据变化时重推(sendStorageDataToPlayer 内部有 changeCounter 守卫),
+                // 不再每 2 秒盲目重发整份玩家背包。
+                manager.syncStorageIfChanged(player);
             }
             manager.pruneDisconnectedPlayers(onlinePlayers);
         }

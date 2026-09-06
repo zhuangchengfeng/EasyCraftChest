@@ -14,15 +14,20 @@ import net.neoforged.fml.loading.FMLPaths;
 
 /**
  * 合成历史统计 + 手动置顶(客户端,全局,存 config 文件夹)。
- * - counts:每个物品成功合成次数(用于金色边框标记)。
+ * - counts:每个物品成功合成次数。
+ * - lastSynth:每个物品最近一次成功合成的时间戳(用于"合成历史"按最新倒序)。
  * - pins:手动置顶的物品 ID 列表(顺序 = 置顶先后,越早置顶越靠前)。
  * 数据全局一份,不随存档分开。JSON:config/easycraftchest_synthesis_stats.json
  */
 public final class SynthesisStats {
+    /** 合成历史最多保留的条数(一页 6×9=54)。达到上限后,再合成新物品会删掉最旧一条。 */
+    public static final int MAX_HISTORY = 54;
     private static final Map<String, Integer> COUNTS = new HashMap<String, Integer>();
+    private static final Map<String, Long> LAST_SYNTH = new HashMap<String, Long>();
     private static final List<String> PIN_ORDER = new ArrayList<String>();
     private static final Gson GSON = new Gson();
     private static final File FILE = FMLPaths.CONFIGDIR.get().resolve("easycraftchest_synthesis_stats.json").toFile();
+    private static long lastSaveTime = 0L;
 
     private SynthesisStats() {
     }
@@ -46,11 +51,62 @@ public final class SynthesisStats {
         if (item == null) {
             return;
         }
-        COUNTS.merge(BuiltInRegistries.ITEM.getKey(item).toString(), 1, Integer::sum);
-        // 已注释:每次合成成功都自动写盘 config/easycraftchest_synthesis_stats.json。
-        // 次数仍记在内存(本次会话内金色边框有效),但不再随每次合成落盘;
-        // 该 json 现在只在你手动置顶/取消置顶(A 键)时才写盘。
-        // SynthesisStats.save();
+        String id = BuiltInRegistries.ITEM.getKey(item).toString();
+        COUNTS.merge(id, 1, Integer::sum);
+        // 新合成视为"最近一次",放最前(时间戳为最新)。若已达历史上限,删掉最旧的一条。
+        LAST_SYNTH.put(id, System.currentTimeMillis());
+        SynthesisStats.trimHistory();
+        // 节流落盘(至少间隔 2 秒),避免高频合成时每一下都写文件;切屏/关屏时再 flush 一次。
+        long now = System.currentTimeMillis();
+        if (now - SynthesisStats.lastSaveTime >= 2000L) {
+            SynthesisStats.save();
+        }
+    }
+
+    /** 合成历史只保留最新 MAX_HISTORY 条:超出则删掉时间戳最旧(最早)的一条。 */
+    private static void trimHistory() {
+        while (LAST_SYNTH.size() > SynthesisStats.MAX_HISTORY) {
+            String oldestId = null;
+            long oldestTime = Long.MAX_VALUE;
+            for (Map.Entry<String, Long> e : LAST_SYNTH.entrySet()) {
+                long t = e.getValue() == null ? 0L : e.getValue();
+                if (t < oldestTime) {
+                    oldestTime = t;
+                    oldestId = e.getKey();
+                }
+            }
+            if (oldestId == null) {
+                break;
+            }
+            LAST_SYNTH.remove(oldestId);
+        }
+    }
+
+    /** 强制写盘(打开/关闭存储界面、切到"合成历史"面板时调用,保证跨会话保留)。 */
+    public static void flush() {
+        SynthesisStats.save();
+    }
+
+    /** 合成历史:返回按最近一次成功合成时间倒序(最新在前)的物品 ID,最多 MAX_HISTORY 条;未合成过则空。 */
+    public static List<String> getRecentSynthesisIds() {
+        ArrayList<String> ids = new ArrayList<String>(LAST_SYNTH.keySet());
+        ids.sort((a, b) -> {
+            long ta = SynthesisStats.lastTimeOrZero(a);
+            long tb = SynthesisStats.lastTimeOrZero(b);
+            if (ta != tb) {
+                return Long.compare(tb, ta);
+            }
+            return a.compareTo(b);
+        });
+        if (ids.size() > SynthesisStats.MAX_HISTORY) {
+            return new ArrayList<String>(ids.subList(0, SynthesisStats.MAX_HISTORY));
+        }
+        return ids;
+    }
+
+    private static long lastTimeOrZero(String itemId) {
+        Long v = itemId == null ? null : LAST_SYNTH.get(itemId);
+        return v == null ? 0L : v;
     }
 
     public static boolean isPinned(Item item) {
@@ -99,11 +155,16 @@ public final class SynthesisStats {
                     if (data.counts != null) {
                         COUNTS.putAll(data.counts);
                     }
+                    if (data.lastSynth != null) {
+                        LAST_SYNTH.putAll(data.lastSynth);
+                    }
                     if (data.pins != null) {
                         PIN_ORDER.addAll(data.pins);
                     }
                 }
             }
+            // 旧版本可能存了超过 54 条,读盘后压缩到上限。
+            SynthesisStats.trimHistory();
         }
         catch (Exception e) {
             // ignore corrupt/missing stats file
@@ -114,6 +175,7 @@ public final class SynthesisStats {
         try {
             StatsData data = new StatsData();
             data.counts = new HashMap<String, Integer>(COUNTS);
+            data.lastSynth = new HashMap<String, Long>(LAST_SYNTH);
             data.pins = new ArrayList<String>(PIN_ORDER);
             File parent = FILE.getParentFile();
             if (parent != null && !parent.exists()) {
@@ -122,6 +184,7 @@ public final class SynthesisStats {
             FileWriter writer = new FileWriter(FILE);
             GSON.toJson(data, writer);
             writer.close();
+            SynthesisStats.lastSaveTime = System.currentTimeMillis();
         }
         catch (Exception e) {
             // ignore save errors
@@ -130,6 +193,7 @@ public final class SynthesisStats {
 
     private static final class StatsData {
         Map<String, Integer> counts = new HashMap<String, Integer>();
+        Map<String, Long> lastSynth = new HashMap<String, Long>();
         List<String> pins = new ArrayList<String>();
     }
 }

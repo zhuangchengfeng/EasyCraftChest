@@ -41,6 +41,8 @@ public class NetworkManager {
         registrar.playToServer(StorageNetworkHandler.OpenStoragePacket.TYPE, StorageNetworkHandler.OpenStoragePacket.STREAM_CODEC, StorageNetworkHandler.OpenStoragePacket::handle);
         registrar.playToServer(TrySynthesisPacket.TYPE, TrySynthesisPacket.STREAM_CODEC, TrySynthesisPacket::handle);
         registrar.playToClient(SynthesisResultPacket.TYPE, SynthesisResultPacket.STREAM_CODEC, SynthesisResultPacket::handle);
+        registrar.playToServer(StorageNetworkHandler.SynthesisHistoryRequestPacket.TYPE, StorageNetworkHandler.SynthesisHistoryRequestPacket.STREAM_CODEC, StorageNetworkHandler.SynthesisHistoryRequestPacket::handle);
+        registrar.playToClient(StorageNetworkHandler.SynthesisHistoryPacket.TYPE, StorageNetworkHandler.SynthesisHistoryPacket.STREAM_CODEC, StorageNetworkHandler.SynthesisHistoryPacket::handle);
     }
 
     public static void sendToServer(CustomPacketPayload payload) {

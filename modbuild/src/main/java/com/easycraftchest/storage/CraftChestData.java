@@ -32,7 +32,9 @@ import com.mojang.serialization.DataResult;
 import com.mojang.serialization.DynamicOps;
 import java.util.AbstractMap;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -74,6 +76,10 @@ public class CraftChestData {
     private boolean cacheValid = false;
     private volatile boolean hasChangedFlag = true;
     private long changeCounter = 0L;
+    /** 合成历史上限(一页 6×9=54)。按"每个物品一条(去重)"维护,超限删最旧。 */
+    public static final int MAX_SYNTH_HISTORY = 54;
+    /** 按方块记录的合成历史:itemKey → 最近一次合成者信息。顺序无关,取历史时按 timeMs 倒序。 */
+    private final Map<String, SynthesisHistoryEntry> synthesisHistory = new HashMap<String, SynthesisHistoryEntry>();
 
     public long addItem(ItemStack stack) {
         if (stack.isEmpty()) {
@@ -326,6 +332,64 @@ public class CraftChestData {
         this.changed = false;
     }
 
+    /** 记录一次成功合成:该物品若已有历史则刷新(移动为最新),超过上限删掉最旧一条。合成者用服务端时钟。 */
+    public void recordSynthesis(String itemKey, String playerName, String playerUuid) {
+        this.insertSynthesisHistory(itemKey, playerName, playerUuid, System.currentTimeMillis());
+    }
+
+    /** 插入/刷新一条历史,保留传入时间戳;超过上限删最旧。加载存档与实时记录共用。 */
+    private void insertSynthesisHistory(String itemKey, String playerName, String playerUuid, long timeMs) {
+        if (itemKey == null || itemKey.isEmpty()) {
+            return;
+        }
+        SynthesisHistoryEntry entry = new SynthesisHistoryEntry(itemKey, playerName == null ? "" : playerName, playerUuid == null ? "" : playerUuid, timeMs);
+        this.synthesisHistory.put(itemKey, entry);
+        if (this.synthesisHistory.size() > CraftChestData.MAX_SYNTH_HISTORY) {
+            this.evictOldestSynthesis();
+        }
+    }
+
+    private void evictOldestSynthesis() {
+        if (this.synthesisHistory.size() <= CraftChestData.MAX_SYNTH_HISTORY) {
+            return;
+        }
+        String oldestKey = null;
+        long oldest = Long.MAX_VALUE;
+        for (Map.Entry<String, SynthesisHistoryEntry> e : this.synthesisHistory.entrySet()) {
+            long t = e.getValue() == null ? 0L : e.getValue().timeMs;
+            if (t >= oldest) continue;
+            oldest = t;
+            oldestKey = e.getKey();
+        }
+        if (oldestKey != null) {
+            this.synthesisHistory.remove(oldestKey);
+        }
+    }
+
+    /** 合成历史(最新在前,最多 MAX_SYNTH_HISTORY 条)。 */
+    public List<SynthesisHistoryEntry> getSynthesisHistory() {
+        ArrayList<SynthesisHistoryEntry> list = new ArrayList<SynthesisHistoryEntry>(this.synthesisHistory.values());
+        list.sort(Comparator.comparingLong((SynthesisHistoryEntry e) -> e.timeMs).reversed());
+        if (list.size() > CraftChestData.MAX_SYNTH_HISTORY) {
+            return new ArrayList<SynthesisHistoryEntry>(list.subList(0, CraftChestData.MAX_SYNTH_HISTORY));
+        }
+        return list;
+    }
+
+    public static class SynthesisHistoryEntry {
+        public final String itemKey;
+        public final String playerName;
+        public final String playerUuid;
+        public final long timeMs;
+
+        public SynthesisHistoryEntry(String itemKey, String playerName, String playerUuid, long timeMs) {
+            this.itemKey = itemKey;
+            this.playerName = playerName;
+            this.playerUuid = playerUuid;
+            this.timeMs = timeMs;
+        }
+    }
+
     /*
      * Enabled force condition propagation
      * Lifted jumps to return sites
@@ -377,6 +441,19 @@ public class CraftChestData {
         }
         tag.putString("SearchFilter", this.searchFilter);
         tag.putInt("CurrentPage", this.currentPage);
+        // 合成历史(每物品一条,记录最近一次合成者+服务端时间)
+        if (!this.synthesisHistory.isEmpty()) {
+            ListTag historyTag = new ListTag();
+            for (SynthesisHistoryEntry e : this.getSynthesisHistory()) {
+                CompoundTag h = new CompoundTag();
+                h.putString("I", e.itemKey);
+                h.putString("N", e.playerName == null ? "" : e.playerName);
+                h.putString("U", e.playerUuid == null ? "" : e.playerUuid);
+                h.putLong("T", e.timeMs);
+                historyTag.add((Tag)h);
+            }
+            tag.put("SynthHistory", (Tag)historyTag);
+        }
         return tag;
     }
 
@@ -385,6 +462,7 @@ public class CraftChestData {
         this.itemOrder.clear();
         this.fullItemDataCache.clear();
         this.lastModified.clear();
+        this.synthesisHistory.clear();
         int version = tag.getInt("version");
         if (version > 2) {
             System.err.println("Warning: Loading data from newer version (" + version + "), some data may be lost.");
@@ -440,6 +518,20 @@ public class CraftChestData {
         }
         this.searchFilter = tag.getString("SearchFilter");
         this.currentPage = tag.getInt("CurrentPage");
+        if (tag.contains("SynthHistory")) {
+            ListTag historyTag = tag.getList("SynthHistory", 10);
+            for (int i = 0; i < historyTag.size(); ++i) {
+                try {
+                    CompoundTag h = historyTag.getCompound(i);
+                    String itemKey = h.getString("I");
+                    if (itemKey.isEmpty()) continue;
+                    this.insertSynthesisHistory(itemKey, h.getString("N"), h.getString("U"), h.getLong("T"));
+                }
+                catch (Exception e) {
+                    LOGGER.error("Failed to load synthesis history entry at index: " + i + ", error: " + e.getMessage());
+                }
+            }
+        }
         this.pruneOrphaned();
         this.setChanged();
     }

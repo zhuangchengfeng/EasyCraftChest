@@ -29,6 +29,7 @@
   "message.synthesis.path": "Path %s: ",
   "message.synthesis.missing_item": "%s x%s",
   "key.easycraftchest.pin": "Pin/Unpin Item",
+  "key.easycraftchest.history": "Toggle Synthesis History",
   "key.categories.easycraftchest": "Storage & Auto-Crafting",
 
   "easycraftchest.configuration.title": "Custom Storage Configs",
@@ -57,6 +58,9 @@
   "gui.easycraftchest.rail.output": "Crafted output destination",
   "gui.easycraftchest.rail.in": "Into storage (I)",
   "gui.easycraftchest.rail.out": "Into player inventory (O)",
+  "gui.easycraftchest.rail.history": "Synthesis history",
+  "gui.easycraftchest.rail.history.on": "Showing synthesized items (newest first)",
+  "gui.easycraftchest.rail.history.off": "Showing recipe catalog",
   "message.synthesis.deposited": "Deposited %s to inventory",
   "message.synthesis.deposit_overflow": "Inventory full: %s to inventory, %s to storage",
   "message.synthesis.creative_ignore_o": "Creative mode: ignoring \"output to inventory (O)\", item goes to storage"

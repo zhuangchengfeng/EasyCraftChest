@@ -21,11 +21,20 @@ public final class ModKeyBindings {
         "key.categories.easycraftchest"
     );
 
+    /** 打开/关闭"合成历史"面板开关(等同点击左侧 rail 的合成历史按钮)。默认 D,可在按键设置里改。 */
+    public static final KeyMapping TOGGLE_HISTORY = new KeyMapping(
+        "key.easycraftchest.history",
+        InputConstants.Type.KEYSYM,
+        GLFW.GLFW_KEY_D,
+        "key.categories.easycraftchest"
+    );
+
     private ModKeyBindings() {
     }
 
     @SubscribeEvent
     public static void registerKeybindings(RegisterKeyMappingsEvent event) {
         event.register(PIN_ITEM);
+        event.register(TOGGLE_HISTORY);
     }
 }

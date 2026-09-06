@@ -306,6 +306,11 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
             }
             // O 模式:成品优先进玩家背包,装不下的部分留在仓库
             this.depositToPlayerIfRequested(serverPlayer, storageData, steps);
+            // 服务端权威记录:该方块"合成过哪个物品、谁合成的、何时"(每物品一条,存方块存档数据)。
+            if (this.targetItem != null && !this.targetItem.isEmpty() && this.targetItem.getItem() != net.minecraft.world.item.Items.AIR) {
+                String historyKey = BuiltInRegistries.ITEM.getKey(this.targetItem.getItem()).toString();
+                storageData.recordSynthesis(historyKey, serverPlayer.getName().getString(), serverPlayer.getStringUUID());
+            }
             storageManager.forceSyncAllViewers(serverPlayer);
             storageManager.setDirty();
             int producedCount = steps.get(steps.size() - 1).getOutputCount();
@@ -523,18 +528,11 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
         return msg;
     }
 
-    /** 每次合成的 INFO 明细(节点数/缺料)是否打印:默认不打印;开发环境加 -Decc.info=true 或
-        -Decc.trace=true 才可见。正式游玩两者都不加 → 合成 INFO 与 TRACE 全部静默。 */
-    private static boolean infoEnabled() {
-        if (Boolean.parseBoolean(System.getProperty("ecc.info", "false"))) {
-            return true;
-        }
-        return Boolean.parseBoolean(System.getProperty("ecc.trace", "false"));
-    }
-
+    /** 合成解析/缺料等逐次合成明细:仅在开发环境加 -Decc.trace=true 时以 TRACE 输出。
+        正常游玩不加该参数 → 这些行既不打印也不写日志文件(避免刷屏/文件膨胀)。 */
     private static void logInfo(String format, Object... args) {
-        if (TrySynthesisPacket.infoEnabled()) {
-            LOGGER.info(format, args);
+        if (Boolean.parseBoolean(System.getProperty("ecc.trace", "false"))) {
+            LOGGER.trace(format, args);
         }
     }
 

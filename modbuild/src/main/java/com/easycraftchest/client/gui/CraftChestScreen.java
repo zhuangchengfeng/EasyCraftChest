@@ -14,8 +14,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
@@ -63,6 +65,8 @@ extends AbstractContainerScreen<CraftChestContainer> {
     private boolean sortDesc = true;
     /** 合成产物去向:false=进仓库(I),true=优先进玩家背包(O,装不下回落仓库)。 */
     private boolean depositToPlayer = false;
+    /** 右上目录是否处于"合成历史"模式(true 时目录显示合成过的物品,按最近成功合成时间倒序)。 */
+    private boolean catalogHistoryMode = false;
 
     private int leftPos;
     private int topPos;
@@ -79,6 +83,10 @@ extends AbstractContainerScreen<CraftChestContainer> {
     // 右侧合成目录
     private List<ItemStack> catalogAllItems = new ArrayList<ItemStack>();
     private List<ItemStack> catalogFilteredItems = new ArrayList<ItemStack>();
+    /** 服务端下发的本方块合成历史(每物品一条,最新在前);仅 history 模式使用。 */
+    private List<CraftChestData.SynthesisHistoryEntry> serverHistory = new ArrayList<CraftChestData.SynthesisHistoryEntry>();
+    /** 与 catalogFilteredItems 对齐的历史条目(history 模式时),供 slot tooltip 显示玩家/时间/头像。 */
+    private final List<CraftChestData.SynthesisHistoryEntry> catalogHistoryEntries = new ArrayList<CraftChestData.SynthesisHistoryEntry>();
     private int catalogPage = 0;
     private int catalogMaxPage = 0;
     private long lastClientUpdateTime = 0L;
@@ -113,6 +121,8 @@ extends AbstractContainerScreen<CraftChestContainer> {
         this.imageHeight = 260;
         this.blockPos = container.getBlockPos();
         this.recipeView = new RecipeView(this.blockPos);
+        // 需求4:九宫格原料格分级贴图基于客户端已同步的仓库镜像判断,不再请求服务端。
+        this.recipeView.setStorageView(baseId -> CraftChestScreen.this.getLocalStorageCount(baseId));
         currentInstance = this;
     }
 
@@ -163,6 +173,10 @@ extends AbstractContainerScreen<CraftChestContainer> {
         this.updatePageButtons();
         if (this.minecraft != null) {
             this.minecraft.execute(() -> this.requestStorageData());
+        }
+        // 若上次离开时停在合成历史模式,打开即拉一次方块历史。
+        if (this.catalogHistoryMode) {
+            this.requestSynthesisHistory();
         }
     }
 
@@ -264,12 +278,11 @@ extends AbstractContainerScreen<CraftChestContainer> {
     }
 
     private void renderCatalogSlot(GuiGraphics graphics, int x, int y, ItemStack stack, int mouseX, int mouseY) {
-        // 置顶物品用亮蓝色边框,合成过的用金色边框,其余默认(凹槽贴图自带外框)
+        // 置顶物品用亮蓝色边框;合成过的金色边框功能暂时注释(冗余),先只用置顶蓝框。
         boolean pinned = !stack.isEmpty() && SynthesisStats.isPinned(stack.getItem());
-        boolean synthesized = !pinned && !stack.isEmpty() && SynthesisStats.getCount(stack.getItem()) > 0;
         this.drawSlotBackground(graphics, x, y);
-        if (pinned || synthesized) {
-            this.drawBorder(graphics, x - 1, y - 1, 18, 18, pinned ? -16722433 : -2643968);
+        if (pinned) {
+            this.drawBorder(graphics, x - 1, y - 1, 18, 18, -16722433);
         }
         if (mouseX >= x && mouseX < x + 16 && mouseY >= y && mouseY < y + 16) {
             graphics.fill(x + 1, y + 1, x + 15, y + 15, -2130706433);
@@ -408,10 +421,90 @@ extends AbstractContainerScreen<CraftChestContainer> {
         int catalogIndex = this.getCatalogSlotAt(mouseX, mouseY);
         if (catalogIndex >= 0 && catalogIndex < this.catalogFilteredItems.size()) {
             ItemStack stack = this.catalogFilteredItems.get(catalogIndex);
-            if (!stack.isEmpty()) {
-                graphics.renderTooltip(this.font, stack, mouseX, mouseY);
+            if (stack.isEmpty()) {
+                return;
+            }
+            // 合成历史模式:额外显示"合成者 + 相对时间 + 头像"(数据来自服务端下发的方块历史)。
+            if (this.catalogHistoryMode && catalogIndex < this.catalogHistoryEntries.size()) {
+                CraftChestData.SynthesisHistoryEntry entry = this.catalogHistoryEntries.get(catalogIndex);
+                if (entry != null) {
+                    this.renderHistoryTooltip(graphics, mouseX, mouseY, stack, entry);
+                    return;
+                }
+            }
+            graphics.renderTooltip(this.font, stack, mouseX, mouseY);
+        }
+    }
+
+    /** 渲染"合成历史"slot 的自定义 tooltip:物品名 + 玩家头像/名字 + 相对时间。 */
+    private void renderHistoryTooltip(GuiGraphics graphics, int mouseX, int mouseY, ItemStack stack, CraftChestData.SynthesisHistoryEntry entry) {
+        java.util.List<Component> lines = new ArrayList<Component>();
+        lines.add(stack.getHoverName().copy().withStyle(net.minecraft.ChatFormatting.WHITE));
+        String rel = this.formatRelativeTime(entry.timeMs);
+        String who = (entry.playerName == null || entry.playerName.isEmpty()) ? "?" : entry.playerName;
+        lines.add(Component.literal(who).withStyle(net.minecraft.ChatFormatting.AQUA).append(Component.literal("  " + rel).withStyle(net.minecraft.ChatFormatting.GRAY)));
+        graphics.renderComponentTooltip(this.font, lines, mouseX, mouseY);
+        // 玩家头像(8×8 正脸,缩放 2 倍显示在 tooltip 首行左侧)。取不到 PlayerInfo 就省略。
+        try {
+            UUID playerUuid = entry.playerUuid == null || entry.playerUuid.isEmpty() ? null : UUID.fromString(entry.playerUuid);
+            if (playerUuid != null && this.minecraft != null && this.minecraft.getConnection() != null) {
+                PlayerInfo info = this.minecraft.getConnection().getPlayerInfo(playerUuid);
+                if (info != null && info.getSkin() != null && info.getSkin().texture() != null) {
+                    // 头像绘制在 tooltip 上方左侧;皮肤贴图正脸在 64×64 中的 (8,8)-(16,16) 区域。
+                    int faceSize = 16;
+                    int ax = mouseX + 10;
+                    int ay = mouseY - 8 - faceSize;
+                    this.drawSkinFace(graphics, info.getSkin().texture(), ax, ay, faceSize);
+                }
             }
         }
+        catch (Exception e) {
+            // 头像渲染失败不影响 tooltip 文本
+        }
+    }
+
+    /** 画玩家皮肤正脸 8×8 区域(缩放至 size×size)。 */
+    private void drawSkinFace(GuiGraphics graphics, ResourceLocation skin, int x, int y, int size) {
+        if (skin == null) {
+            return;
+        }
+        com.mojang.blaze3d.systems.RenderSystem.enableBlend();
+        com.mojang.blaze3d.systems.RenderSystem.defaultBlendFunc();
+        com.mojang.blaze3d.systems.RenderSystem.setShaderTexture(0, skin);
+        com.mojang.blaze3d.systems.RenderSystem.setShader(net.minecraft.client.renderer.GameRenderer::getPositionTexShader);
+        float u0 = 8.0f / 64.0f;
+        float v0 = 8.0f / 64.0f;
+        float u1 = 16.0f / 64.0f;
+        float v1 = 16.0f / 64.0f;
+        com.mojang.blaze3d.vertex.Tesselator tess = com.mojang.blaze3d.vertex.Tesselator.getInstance();
+        com.mojang.blaze3d.vertex.BufferBuilder buffer = tess.begin(com.mojang.blaze3d.vertex.VertexFormat.Mode.QUADS, com.mojang.blaze3d.vertex.DefaultVertexFormat.POSITION_TEX);
+        buffer.addVertex(x, y, 0.0f).setUv(u0, v0);
+        buffer.addVertex(x, y + size, 0.0f).setUv(u0, v1);
+        buffer.addVertex(x + size, y + size, 0.0f).setUv(u1, v1);
+        buffer.addVertex(x + size, y, 0.0f).setUv(u1, v0);
+        com.mojang.blaze3d.vertex.BufferUploader.drawWithShader(buffer.build());
+    }
+
+    /** 把毫秒时间差格式化为"X秒前/X分钟前/X小时前/X天前"。 */
+    private String formatRelativeTime(long timeMs) {
+        long diff = System.currentTimeMillis() - timeMs;
+        if (diff < 0L) {
+            diff = 0L;
+        }
+        long sec = diff / 1000L;
+        if (sec < 60L) {
+            return sec + " 秒前";
+        }
+        long min = sec / 60L;
+        if (min < 60L) {
+            return min + " 分钟前";
+        }
+        long hr = min / 60L;
+        if (hr < 24L) {
+            return hr + " 小时前";
+        }
+        long day = hr / 24L;
+        return day + " 天前";
     }
 
     @Override
@@ -423,6 +516,13 @@ extends AbstractContainerScreen<CraftChestContainer> {
         }
         if (!textFocused && ModKeyBindings.PIN_ITEM.matches(keyCode, scanCode)) {
             this.togglePinAtMouse();
+            return true;
+        }
+        if (!textFocused && ModKeyBindings.TOGGLE_HISTORY.matches(keyCode, scanCode)) {
+            this.toggleCatalogHistory();
+            CraftChestScreen.saveUiPrefs(this);
+            this.refreshAfterModeChange();
+            this.saveState();
             return true;
         }
         return super.keyPressed(keyCode, scanCode, modifiers);
@@ -629,6 +729,23 @@ extends AbstractContainerScreen<CraftChestContainer> {
         return k;
     }
 
+    /** 客户端本地查询:某基础物品 id 在仓库镜像中的总量(需求4用;把带 NBT/变体后缀的条目累加到基础 id)。 */
+    private long getLocalStorageCount(String baseItemId) {
+        if (baseItemId == null || this.storageData == null || this.storageData.isEmpty()) {
+            return 0L;
+        }
+        long total = 0L;
+        for (Map.Entry<String, Long> entry : this.storageData.entrySet()) {
+            if (entry == null || entry.getKey() == null || entry.getValue() == null) {
+                continue;
+            }
+            if (this.stripCacheKeySuffix(entry.getKey()).equals(baseItemId)) {
+                total += entry.getValue();
+            }
+        }
+        return total;
+    }
+
     private void handleStorageClick(int slotIndex, int button) {
         List<Map.Entry<String, Long>> pageItems = this.getCurrentPageItems();
         if (slotIndex < pageItems.size()) {
@@ -737,12 +854,12 @@ extends AbstractContainerScreen<CraftChestContainer> {
         this.updatePageButtons();
     }
 
-    /** 左侧按钮轨点击:0=搜索范围循环,1=自动聚焦切换,2=排序方式循环,3=升/降序切换。 */
+    /** 左侧按钮轨点击:0=搜索范围循环,1=自动聚焦切换,2=排序方式循环,3=升/降序切换,4=产物去向切换,5=目录/合成历史切换。 */
     private boolean handleModeRailClick(double mouseX, double mouseY) {
         if (mouseX < (double)this.railLeft || mouseX >= (double)(this.railLeft + RAIL_W)) {
             return false;
         }
-        if (mouseY < (double)this.railTop || mouseY >= (double)(this.railTop + 100)) {
+        if (mouseY < (double)this.railTop || mouseY >= (double)(this.railTop + 120)) {
             return false;
         }
         int idx = (int)(mouseY - (double)this.railTop) / 20;
@@ -756,12 +873,42 @@ extends AbstractContainerScreen<CraftChestContainer> {
             this.sortDesc = !this.sortDesc;
         } else if (idx == 4) {
             this.depositToPlayer = !this.depositToPlayer;
+        } else if (idx == 5) {
+            // 目录 ↔ 合成历史 视图切换:换数据源并回到第一页
+            this.toggleCatalogHistory();
         } else {
             return false;
         }
         CraftChestScreen.saveUiPrefs(this);
         this.refreshAfterModeChange();
+        this.saveState();
         return true;
+    }
+
+    /** 目录 ↔ 合成历史 视图切换(D 键与 rail 按钮共用):换数据源并回到第一页。 */
+    private void toggleCatalogHistory() {
+        this.catalogHistoryMode = !this.catalogHistoryMode;
+        this.catalogPage = 0;
+        this.catalogMaxPage = 0;
+        if (this.catalogHistoryMode) {
+            // 进入历史面板时向服务端拉取一次本方块合成历史(每物品一条,最新在前)。
+            this.requestSynthesisHistory();
+        }
+    }
+
+    /** 请求本方块合成历史(服务端权威)。 */
+    private void requestSynthesisHistory() {
+        if (this.blockPos == null) {
+            return;
+        }
+        NetworkManager.sendToServer(new StorageNetworkHandler.SynthesisHistoryRequestPacket());
+    }
+
+    /** 收到服务端下发合成历史:缓存并刷新目录。 */
+    public void receiveSynthesisHistory(List<CraftChestData.SynthesisHistoryEntry> entries) {
+        this.serverHistory = entries != null ? new ArrayList<CraftChestData.SynthesisHistoryEntry>(entries) : new ArrayList<CraftChestData.SynthesisHistoryEntry>();
+        this.applyCatalogFilter();
+        this.updatePageButtons();
     }
 
     /** 绘制 RS 式左侧按钮轨(背板 + 模式按钮)。 */
@@ -771,12 +918,12 @@ extends AbstractContainerScreen<CraftChestContainer> {
         }
         int hover = this.railHoverIndex(mouseX, mouseY);
         // 背板:科技感深蓝半透明
-        graphics.fill(this.railLeft - 2, this.railTop - 3, this.railLeft + RAIL_W + 2, this.railTop + 103, 0xC0121622);
+        graphics.fill(this.railLeft - 2, this.railTop - 3, this.railLeft + RAIL_W + 2, this.railTop + 123, 0xC0121622);
         graphics.fill(this.railLeft - 2, this.railTop - 3, this.railLeft + RAIL_W + 2, this.railTop - 2, -11184811);
-        graphics.fill(this.railLeft - 2, this.railTop + 102, this.railLeft + RAIL_W + 2, this.railTop + 103, -11184811);
-        for (int i = 0; i < 5; i++) {
+        graphics.fill(this.railLeft - 2, this.railTop + 122, this.railLeft + RAIL_W + 2, this.railTop + 123, -11184811);
+        for (int i = 0; i < 6; i++) {
             int y = this.railTop + i * 20;
-            boolean active = (i == 0 && this.searchScope != SearchScope.BOTH) || (i == 1 && this.autoFocusSearch) || i == 2 || i == 3 || (i == 4 && this.depositToPlayer);
+            boolean active = (i == 0 && this.searchScope != SearchScope.BOTH) || (i == 1 && this.autoFocusSearch) || i == 2 || i == 3 || (i == 4 && this.depositToPlayer) || (i == 5 && this.catalogHistoryMode);
             boolean hovered = hover == i;
             int inner = hovered ? 0x77224488 : (active ? 0x552266FF : 0x55101014);
             graphics.fill(this.railLeft, y, this.railLeft + RAIL_W, y + 16, inner);
@@ -789,7 +936,7 @@ extends AbstractContainerScreen<CraftChestContainer> {
         }
     }
 
-    /** 画单个按钮的图标:0=搜索范围(L/L+R/R),1=自动聚焦,2=排序(# / ID / 时钟)。 */
+    /** 画单个按钮的图标:0=搜索范围(L/L+R/R),1=自动聚焦,2=排序(# / ID / 时钟),3=升/降序,4=产物去向(I/O),5=合成历史(H)。 */
     private void drawRailButtonIcon(GuiGraphics graphics, int idx, int x, int y, int col) {
         if (idx == 0) {
             String t = this.searchScope == SearchScope.BOTH ? "L+R" : (this.searchScope == SearchScope.CATALOG_ONLY ? "R" : "L");
@@ -809,6 +956,11 @@ extends AbstractContainerScreen<CraftChestContainer> {
         if (idx == 4) {
             // 合成产物去向:I=进仓库,O=进玩家背包
             this.drawRailText(graphics, this.depositToPlayer ? "O" : "I", x, y, col);
+            return;
+        }
+        if (idx == 5) {
+            // 目录 ↔ 合成历史切换
+            this.drawRailText(graphics, this.catalogHistoryMode ? "H+" : "H", x, y, col);
             return;
         }
         if (this.sortMode == SortMode.COUNT) {
@@ -841,11 +993,11 @@ extends AbstractContainerScreen<CraftChestContainer> {
         if (mouseX < (double)this.railLeft || mouseX >= (double)(this.railLeft + RAIL_W)) {
             return -1;
         }
-        if (mouseY < (double)this.railTop || mouseY >= (double)(this.railTop + 100)) {
+        if (mouseY < (double)this.railTop || mouseY >= (double)(this.railTop + 120)) {
             return -1;
         }
         int idx = (int)(mouseY - (double)this.railTop) / 20;
-        return idx >= 0 && idx <= 4 ? idx : -1;
+        return idx >= 0 && idx <= 5 ? idx : -1;
     }
 
     /** 悬停左侧按钮时给出中英 tooltip。 */
@@ -867,9 +1019,12 @@ extends AbstractContainerScreen<CraftChestContainer> {
         } else if (idx == 3) {
             lines.add(Component.translatable("gui.easycraftchest.rail.sort_direction"));
             lines.add(Component.translatable(this.sortDesc ? "gui.easycraftchest.rail.desc" : "gui.easycraftchest.rail.asc"));
-        } else {
+        } else if (idx == 4) {
             lines.add(Component.translatable("gui.easycraftchest.rail.output"));
             lines.add(Component.translatable(this.depositToPlayer ? "gui.easycraftchest.rail.out" : "gui.easycraftchest.rail.in"));
+        } else {
+            lines.add(Component.translatable("gui.easycraftchest.rail.history"));
+            lines.add(Component.translatable(this.catalogHistoryMode ? "gui.easycraftchest.rail.history.on" : "gui.easycraftchest.rail.history.off"));
         }
         graphics.renderComponentTooltip(this.font, lines, mouseX, mouseY);
     }
@@ -901,6 +1056,7 @@ extends AbstractContainerScreen<CraftChestContainer> {
                     }
                     screen.sortDesc = data.desc;
                     screen.depositToPlayer = data.deposit;
+                    screen.catalogHistoryMode = data.history;
                 }
             }
         }
@@ -917,6 +1073,7 @@ extends AbstractContainerScreen<CraftChestContainer> {
             data.sort = screen.sortMode.name();
             data.desc = screen.sortDesc;
             data.deposit = screen.depositToPlayer;
+            data.history = screen.catalogHistoryMode;
             com.google.gson.Gson gson = new com.google.gson.Gson();
             java.io.File parent = CraftChestScreen.UI_PREFS_FILE.getParentFile();
             if (parent != null && !parent.exists()) {
@@ -937,6 +1094,7 @@ extends AbstractContainerScreen<CraftChestContainer> {
         String sort = "COUNT";
         boolean desc = true;
         boolean deposit = false;
+        boolean history = false;
     }
 
     private void previousPage() {
@@ -1014,28 +1172,44 @@ extends AbstractContainerScreen<CraftChestContainer> {
 
     private void applyCatalogFilter() {
         this.catalogFilteredItems.clear();
-        Set<Item> craftable = ItemCatalog.buildCraftableItems();
-        for (ItemStack stack : this.catalogAllItems) {
-            if (!craftable.contains(stack.getItem())) continue;
-            // 搜索范围:仅仓库栏时,目录(配方栏)不过滤
-            if (this.searchScope != SearchScope.STORAGE_ONLY && !ItemCatalog.matchesSearchFilter(stack, this.searchFilter)) continue;
-            this.catalogFilteredItems.add(stack);
+        this.catalogHistoryEntries.clear();
+        // 合成历史模式:右上目录换成"本方块合成过的物品"(服务端权威),按最近成功合成时间倒序,最新在前。
+        if (this.catalogHistoryMode) {
+            for (CraftChestData.SynthesisHistoryEntry entry : this.serverHistory) {
+                String id = entry == null ? null : entry.itemKey;
+                if (id == null || id.isEmpty()) continue;
+                Item item = BuiltInRegistries.ITEM.get(ResourceLocation.tryParse(id));
+                if (item == null || item == Items.AIR) continue;
+                ItemStack stack = new ItemStack(item);
+                // 搜索范围:仅仓库栏时,目录(配方栏)不过滤
+                if (this.searchScope != SearchScope.STORAGE_ONLY && !ItemCatalog.matchesSearchFilter(stack, this.searchFilter)) continue;
+                this.catalogFilteredItems.add(stack);
+                this.catalogHistoryEntries.add(entry);
+            }
+        } else {
+            Set<Item> craftable = ItemCatalog.buildCraftableItems();
+            for (ItemStack stack : this.catalogAllItems) {
+                if (!craftable.contains(stack.getItem())) continue;
+                // 搜索范围:仅仓库栏时,目录(配方栏)不过滤
+                if (this.searchScope != SearchScope.STORAGE_ONLY && !ItemCatalog.matchesSearchFilter(stack, this.searchFilter)) continue;
+                this.catalogFilteredItems.add(stack);
+            }
+            // 置顶物品在前(按置顶先后顺序),未置顶按名称
+            this.catalogFilteredItems.sort((a, b) -> {
+                int pa = SynthesisStats.getPinIndex(BuiltInRegistries.ITEM.getKey(a.getItem()).toString());
+                int pb = SynthesisStats.getPinIndex(BuiltInRegistries.ITEM.getKey(b.getItem()).toString());
+                if (pa >= 0 && pb >= 0) {
+                    return Integer.compare(pa, pb);
+                }
+                if (pa >= 0) {
+                    return -1;
+                }
+                if (pb >= 0) {
+                    return 1;
+                }
+                return a.getHoverName().getString().compareToIgnoreCase(b.getHoverName().getString());
+            });
         }
-        // 置顶物品在前(按置顶先后顺序),未置顶按名称
-        this.catalogFilteredItems.sort((a, b) -> {
-            int pa = SynthesisStats.getPinIndex(BuiltInRegistries.ITEM.getKey(a.getItem()).toString());
-            int pb = SynthesisStats.getPinIndex(BuiltInRegistries.ITEM.getKey(b.getItem()).toString());
-            if (pa >= 0 && pb >= 0) {
-                return Integer.compare(pa, pb);
-            }
-            if (pa >= 0) {
-                return -1;
-            }
-            if (pb >= 0) {
-                return 1;
-            }
-            return a.getHoverName().getString().compareToIgnoreCase(b.getHoverName().getString());
-        });
         this.catalogMaxPage = Math.max(0, (this.catalogFilteredItems.size() - 1) / 54);
         if (this.catalogPage > this.catalogMaxPage) {
             this.catalogPage = this.catalogMaxPage;
@@ -1257,7 +1431,10 @@ extends AbstractContainerScreen<CraftChestContainer> {
             if (packet.success()) {
                 ItemStack target = this.recipeView.getTargetItem();
                 if (!target.isEmpty()) {
-                    SynthesisStats.recordSynthesis(target.getItem());
+                    // 合成记录改由服务端权威落盘(方块数据);若正开着历史面板,刷新一次以把新条目排到最前。
+                    if (this.catalogHistoryMode) {
+                        this.requestSynthesisHistory();
+                    }
                     this.applyCatalogFilter();
                     this.updatePageButtons();
                 }
@@ -1283,6 +1460,8 @@ extends AbstractContainerScreen<CraftChestContainer> {
 
     public void onClose() {
         this.saveState();
+        // 需求2:合成历史为客户端本地持久化;关屏时把内存中的"最近合成时间/次数"写盘。
+        SynthesisStats.flush();
         if (this.blockPos != null) {
             this.sendItemOperation(StorageNetworkHandler.OperationType.CLOSE, "", 0L);
         }

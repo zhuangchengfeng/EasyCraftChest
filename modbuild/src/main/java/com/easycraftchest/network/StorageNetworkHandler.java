@@ -34,7 +34,9 @@ import com.easycraftchest.client.gui.CraftChestScreen;
 import com.easycraftchest.container.CraftChestContainer;
 import com.easycraftchest.server.storage.CraftChestManager;
 import com.easycraftchest.storage.CraftChestData;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
@@ -580,6 +582,102 @@ public class StorageNetworkHandler {
 
         public Map<String, Long> getModified() {
             return this.modified;
+        }
+    }
+
+    /** 客户端→服务端:请求当前打开方块的合成历史(仅在进入历史面板/合成成功后发送一次)。 */
+    public static class SynthesisHistoryRequestPacket
+    implements CustomPacketPayload {
+        public static final CustomPacketPayload.Type<SynthesisHistoryRequestPacket> TYPE = new CustomPacketPayload.Type(ResourceLocation.fromNamespaceAndPath((String)"easycraftchest", (String)"synthesis_history_request"));
+        public static final StreamCodec<FriendlyByteBuf, SynthesisHistoryRequestPacket> STREAM_CODEC = StreamCodec.ofMember(SynthesisHistoryRequestPacket::write, SynthesisHistoryRequestPacket::new);
+
+        public SynthesisHistoryRequestPacket() {
+        }
+
+        public SynthesisHistoryRequestPacket(FriendlyByteBuf buf) {
+        }
+
+        public void write(FriendlyByteBuf buf) {
+        }
+
+        public CustomPacketPayload.Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+
+        public static void handle(SynthesisHistoryRequestPacket packet, IPayloadContext context) {
+            context.enqueueWork(() -> {
+                if (!context.flow().isServerbound()) {
+                    return;
+                }
+                Player p = context.player();
+                if (!(p instanceof ServerPlayer)) {
+                    return;
+                }
+                ServerPlayer player = (ServerPlayer)p;
+                Level lvl = player.level();
+                if (!(lvl instanceof ServerLevel)) {
+                    return;
+                }
+                ServerLevel serverLevel = (ServerLevel)lvl;
+                CraftChestManager manager = CraftChestManager.get(serverLevel);
+                manager.sendSynthesisHistoryToPlayer(player);
+            });
+        }
+    }
+
+    /** 服务端→客户端:合成历史(每物品一条,最新在前),含合成者名/UUID/服务端时间戳。 */
+    public static class SynthesisHistoryPacket
+    implements CustomPacketPayload {
+        public static final CustomPacketPayload.Type<SynthesisHistoryPacket> TYPE = new CustomPacketPayload.Type(ResourceLocation.fromNamespaceAndPath((String)"easycraftchest", (String)"synthesis_history"));
+        public static final StreamCodec<FriendlyByteBuf, SynthesisHistoryPacket> STREAM_CODEC = StreamCodec.ofMember(SynthesisHistoryPacket::write, SynthesisHistoryPacket::new);
+        private final List<CraftChestData.SynthesisHistoryEntry> entries;
+
+        public SynthesisHistoryPacket(List<CraftChestData.SynthesisHistoryEntry> entries) {
+            this.entries = entries != null ? new ArrayList<CraftChestData.SynthesisHistoryEntry>(entries) : new ArrayList<CraftChestData.SynthesisHistoryEntry>();
+        }
+
+        public SynthesisHistoryPacket(FriendlyByteBuf buf) {
+            int n = buf.readInt();
+            ArrayList<CraftChestData.SynthesisHistoryEntry> list = new ArrayList<CraftChestData.SynthesisHistoryEntry>();
+            for (int i = 0; i < n; ++i) {
+                String itemKey = buf.readUtf();
+                String name = buf.readUtf();
+                String uuid = buf.readUtf();
+                long t = buf.readLong();
+                list.add(new CraftChestData.SynthesisHistoryEntry(itemKey, name, uuid, t));
+            }
+            this.entries = list;
+        }
+
+        public void write(FriendlyByteBuf buf) {
+            buf.writeInt(this.entries.size());
+            for (CraftChestData.SynthesisHistoryEntry e : this.entries) {
+                buf.writeUtf(e.itemKey == null ? "" : e.itemKey);
+                buf.writeUtf(e.playerName == null ? "" : e.playerName);
+                buf.writeUtf(e.playerUuid == null ? "" : e.playerUuid);
+                buf.writeLong(e.timeMs);
+            }
+        }
+
+        public List<CraftChestData.SynthesisHistoryEntry> getEntries() {
+            return new ArrayList<CraftChestData.SynthesisHistoryEntry>(this.entries);
+        }
+
+        public CustomPacketPayload.Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+
+        public static void handle(SynthesisHistoryPacket packet, IPayloadContext context) {
+            context.enqueueWork(() -> {
+                if (!context.flow().isClientbound()) {
+                    return;
+                }
+                Minecraft mc = Minecraft.getInstance();
+                Screen scr = mc.screen;
+                if (scr instanceof CraftChestScreen) {
+                    ((CraftChestScreen)scr).receiveSynthesisHistory(packet.getEntries());
+                }
+            });
         }
     }
 

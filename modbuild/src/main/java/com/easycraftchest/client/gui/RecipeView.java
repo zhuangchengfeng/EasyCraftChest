@@ -39,7 +39,17 @@ import net.minecraft.world.level.Level;
  * 逻辑从 JeiStyleRecipeScreen 抽出,改为可在任意位置渲染的紧凑版本。
  */
 public class RecipeView {
+    /** 仓库只读查询(客户端本地镜像,不入服务端):按基础物品 id 返回当前存储数量。 */
+    public interface StorageView {
+        long countOf(String baseItemId);
+    }
+
     private final BlockPos storagePos;
+    private StorageView storageView = null;
+    private static final ResourceLocation TEX_BASE = ResourceLocation.fromNamespaceAndPath("easycraftchest", "textures/gui/slot.png");
+    private static final ResourceLocation TEX_EXISTING = ResourceLocation.fromNamespaceAndPath("easycraftchest", "textures/gui/slot_existing.png");
+    private static final ResourceLocation TEX_CRAFTING = ResourceLocation.fromNamespaceAndPath("easycraftchest", "textures/gui/slot_crafting.png");
+    private static final ResourceLocation TEX_NOTEXIT = ResourceLocation.fromNamespaceAndPath("easycraftchest", "textures/gui/slot_notexit.png");
     private ItemStack targetItem = ItemStack.EMPTY;
     private final List<Recipe<?>> recipes = new ArrayList<Recipe<?>>();
     private int currentRecipeIndex = 0;
@@ -58,6 +68,11 @@ public class RecipeView {
 
     public RecipeView(BlockPos storagePos) {
         this.storagePos = storagePos;
+    }
+
+    /** 注入客户端本地仓库查询(需求4:判断某原料是否够/缺)。 */
+    public void setStorageView(StorageView view) {
+        this.storageView = view;
     }
 
     public void setTarget(ItemStack item) {
@@ -444,17 +459,159 @@ public class RecipeView {
 
     private void renderCraftingRecipe(GuiGraphics graphics, Font font, CraftingRecipe recipe, int x, int y, int mouseX, int mouseY) {
         NonNullList ingredients = recipe.getIngredients();
+        // 需求4:逐格计算原料格的状态(空白/仓库有/缺但可合成/缺且不可合成),客户端本地判断,不上服务端。
+        // 同一原料(同一组候选物)在九宫格出现多次时,按左上→右下的阅读顺序,先被仓库数量覆盖到的格子算"有"。
+        Ingredient[] grid = new Ingredient[9];
+        for (int i = 0; i < 9; ++i) {
+            grid[i] = i < ingredients.size() ? (Ingredient)ingredients.get(i) : Ingredient.EMPTY;
+        }
+        int[] state = this.computeGridSlotStates(grid);
         for (int i = 0; i < 9; ++i) {
             int row = i / 3;
             int col = i % 3;
             int slotX = x + col * 18;
             int slotY = y + row * 18;
-            Ingredient ingredient = i < ingredients.size() ? (Ingredient)ingredients.get(i) : Ingredient.EMPTY;
-            this.renderIngredientSlot(graphics, font, ingredient, slotX, slotY, mouseX, mouseY);
+            ResourceLocation tex = RecipeView.gridSlotTexture(state[i]);
+            if (grid[i].isEmpty()) {
+                this.renderCraftingBackground(graphics, tex, slotX, slotY);
+            } else {
+                this.renderIngredientSlotWithTexture(graphics, font, grid[i], slotX, slotY, tex, mouseX, mouseY);
+            }
         }
         this.renderArrow(graphics, font, x + 60, y + 18);
         ItemStack result = recipe.getResultItem((HolderLookup.Provider)Minecraft.getInstance().level.registryAccess());
         this.renderSlot(graphics, font, x + 86, y + 18, result, mouseX, mouseY);
+    }
+
+    /** 状态码 → 贴图:空白用基础 slot,其余按需求4分级。 */
+    private static ResourceLocation gridSlotTexture(int state) {
+        if (state == 1) {
+            return RecipeView.TEX_EXISTING;
+        }
+        if (state == 2) {
+            return RecipeView.TEX_CRAFTING;
+        }
+        if (state == 3) {
+            return RecipeView.TEX_NOTEXIT;
+        }
+        return RecipeView.TEX_BASE;
+    }
+
+    /**
+     * 计算 3x3 配方 9 格各自状态:
+     * 0=空白;1=仓库有货(existing);2=缺、该原料可用工作台合成(crafting);3=缺、无法工作台合成(notexit)。
+     * 同候选组(如三格甘蔗、三格羊毛 tag)合并计数:按阅读顺序先覆盖前 N 格为 existing,超出部分判缺。
+     */
+    private int[] computeGridSlotStates(Ingredient[] grid) {
+        int[] state = new int[9];
+        java.util.Map<String, java.util.List<Integer>> groups = new java.util.LinkedHashMap<String, java.util.List<Integer>>();
+        for (int i = 0; i < 9; ++i) {
+            state[i] = 0;
+            Ingredient ing = grid[i];
+            if (ing == null || ing.isEmpty()) {
+                continue;
+            }
+            String sig = RecipeView.ingredientSignature(ing);
+            if (sig == null || sig.isEmpty()) {
+                continue;
+            }
+            groups.computeIfAbsent(sig, k -> new ArrayList<Integer>()).add(i);
+        }
+        if (this.storageView == null) {
+            return state;
+        }
+        for (java.util.Map.Entry<String, java.util.List<Integer>> entry : groups.entrySet()) {
+            java.util.List<Integer> cells = entry.getValue();
+            String sig = entry.getKey();
+            long available = 0L;
+            boolean craftable = false;
+            for (String baseId : sig.split(",")) {
+                if (baseId == null || baseId.isEmpty()) {
+                    continue;
+                }
+                available += Math.max(0L, this.storageView.countOf(baseId));
+                if (!craftable) {
+                    craftable = RecipeView.isWorkbenchCraftable(baseId);
+                }
+            }
+            int covered = (int)Math.min((long)cells.size(), available);
+            for (int k = 0; k < cells.size(); ++k) {
+                int idx = cells.get(k).intValue();
+                state[idx] = k < covered ? 1 : (craftable ? 2 : 3);
+            }
+        }
+        return state;
+    }
+
+    /** 原料的稳定签名:候选物品的基础注册 id 排序后逗号拼接(用于区分"同一种原料"出现几格)。 */
+    private static String ingredientSignature(Ingredient ing) {
+        if (ing == null || ing.isEmpty()) {
+            return "";
+        }
+        java.util.TreeSet<String> ids = new java.util.TreeSet<String>();
+        for (ItemStack s : ing.getItems()) {
+            if (s == null || s.isEmpty()) {
+                continue;
+            }
+            ids.add(BuiltInRegistries.ITEM.getKey(s.getItem()).toString());
+        }
+        return String.join(",", ids);
+    }
+
+    /** 该原料是否能由工作台配方产出(能被一键合成到);用于缺料时选 crafting / notexit 贴图。 */
+    private static boolean isWorkbenchCraftable(String baseItemId) {
+        try {
+            Item item = BuiltInRegistries.ITEM.get(ResourceLocation.tryParse(baseItemId));
+            if (item == null || item == net.minecraft.world.item.Items.AIR) {
+                return false;
+            }
+            return ItemCatalog.buildCraftableItems().contains(item);
+        }
+        catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 在 slot 上铺一层 18×18 贴图作底。 */
+    private void renderCraftingBackground(GuiGraphics graphics, ResourceLocation tex, int x, int y) {
+        RecipeView.drawTex(graphics, tex == null ? RecipeView.TEX_BASE : tex, x - 1, y - 1, 18, 18);
+    }
+
+    /** 有原料的格子:先铺分级底图,再画物品图标与悬停高亮。 */
+    private void renderIngredientSlotWithTexture(GuiGraphics graphics, Font font, Ingredient ingredient, int x, int y, ResourceLocation tex, int mouseX, int mouseY) {
+        this.renderCraftingBackground(graphics, tex, x, y);
+        ItemStack[] stacks = ingredient.getItems();
+        if (stacks == null || stacks.length == 0) {
+            return;
+        }
+        ItemStack displayStack = stacks[(int)(System.currentTimeMillis() / 1000L % (long)stacks.length)];
+        boolean hovered = mouseX >= x && mouseX < x + 16 && mouseY >= y && mouseY < y + 16;
+        if (hovered) {
+            graphics.fill(x + 1, y + 1, x + 15, y + 15, -2130706433);
+        }
+        if (!displayStack.isEmpty()) {
+            graphics.renderItem(displayStack, x, y);
+            if (hovered) {
+                this.hoveredStack = displayStack;
+            }
+        }
+    }
+
+    private static void drawTex(GuiGraphics graphics, ResourceLocation tex, int x, int y, int w, int h) {
+        if (tex == null) {
+            return;
+        }
+        com.mojang.blaze3d.systems.RenderSystem.enableBlend();
+        com.mojang.blaze3d.systems.RenderSystem.defaultBlendFunc();
+        com.mojang.blaze3d.systems.RenderSystem.setShaderTexture(0, tex);
+        com.mojang.blaze3d.systems.RenderSystem.setShader(net.minecraft.client.renderer.GameRenderer::getPositionTexShader);
+        com.mojang.blaze3d.vertex.Tesselator tess = com.mojang.blaze3d.vertex.Tesselator.getInstance();
+        com.mojang.blaze3d.vertex.BufferBuilder buffer = tess.begin(com.mojang.blaze3d.vertex.VertexFormat.Mode.QUADS, com.mojang.blaze3d.vertex.DefaultVertexFormat.POSITION_TEX);
+        buffer.addVertex(x, y, 0.0f).setUv(0.0f, 0.0f);
+        buffer.addVertex(x, y + h, 0.0f).setUv(0.0f, 1.0f);
+        buffer.addVertex(x + w, y + h, 0.0f).setUv(1.0f, 1.0f);
+        buffer.addVertex(x + w, y, 0.0f).setUv(1.0f, 0.0f);
+        com.mojang.blaze3d.vertex.BufferUploader.drawWithShader(buffer.build());
     }
 
     private void renderCookingRecipe(GuiGraphics graphics, Font font, AbstractCookingRecipe recipe, int x, int y, int mouseX, int mouseY) {

@@ -29,6 +29,7 @@
   "message.synthesis.path": "路径%s：",
   "message.synthesis.missing_item": "%s x%s",
   "key.easycraftchest.pin": "置顶/取消置顶物品",
+  "key.easycraftchest.history": "切换合成历史",
   "key.categories.easycraftchest": "存储与一键合成",
 
   "easycraftchest.configuration.title": "自定义存储配置",
@@ -57,6 +58,9 @@
   "gui.easycraftchest.rail.output": "合成产物去向",
   "gui.easycraftchest.rail.in": "进仓库 (I)",
   "gui.easycraftchest.rail.out": "进玩家背包 (O)",
+  "gui.easycraftchest.rail.history": "合成历史",
+  "gui.easycraftchest.rail.history.on": "显示合成过的物品(最新在前)",
+  "gui.easycraftchest.rail.history.off": "显示配方目录",
   "message.synthesis.deposited": "已放入背包 %s 个",
   "message.synthesis.deposit_overflow": "背包放不下:放入背包 %s 个,其余 %s 个进仓库",
   "message.synthesis.creative_ignore_o": "当前为创造模式,已忽略\"输出到背包(O)\",产物进仓库"

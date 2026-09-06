@@ -391,8 +391,9 @@ extends SavedData {
     private void handleSyncRequestOperation(ServerPlayer player, CraftChestData storage, StorageNetworkHandler.ItemOperationPacket packet) {
         // LOGGER.debug("handleSyncRequestOperation() \u5f00\u59cb: \u73a9\u5bb6={}", (Object)player.getName().getString());
         // LOGGER.debug("\u5ba2\u6237\u7aef\u8bf7\u6c42\u9875\u7801={}, \u5ba2\u6237\u7aef\u641c\u7d22\u8fc7\u6ee4\u5668='{}'", (Object)packet.getTargetPage(), (Object)packet.getSearchFilter());
+        // \u5ba2\u6237\u7aef\u7ea6\u6bcf\u79d2\u8f6e\u8be2\u4e00\u6b21 SYNC_REQUEST;\u5bb9\u5668\u6570\u636e\u53ea\u5728\u771f\u6b63\u53d8\u5316\u65f6\u624d\u56de\u63a8(sendStorageDataToPlayer \u5185\u90e8\u5b88\u536b)\u3002
+        // \u80cc\u5305\u6570\u636e\u4e0d\u518d\u968f\u6bcf\u6b21\u8f6e\u8be2\u65e0\u6761\u4ef6\u91cd\u53d1(\u5ba2\u6237\u7aef\u5904\u7406\u51fd\u6570\u4e3a\u7a7a,\u5c5e\u5e26\u5bbd\u6d6a\u8d39;\u771f\u6b63\u4e22/\u53d6\u65f6\u53e6\u6709\u64cd\u4f5c\u8def\u5f84\u56de\u53d1)\u3002
         this.sendStorageDataToPlayer(player, storage, packet.getTargetPage(), packet.getSearchFilter());
-        this.sendPlayerInventoryToClient(player);
     }
 
     private void handleDropOperation(ServerPlayer player, CraftChestData storage, StorageNetworkHandler.ItemOperationPacket packet) {
@@ -571,6 +572,34 @@ extends SavedData {
             String searchFilter = this.playerLastSearchFilter.getOrDefault(playerId, "");
             this.sendStorageDataToPlayer(player, storage, currentPage, searchFilter);
             this.sendPlayerInventoryToClient(player);
+        }
+    }
+
+    /** \u4e0b\u53d1\u5f53\u524d\u6253\u5f00\u65b9\u5757\u7684\u5408\u6210\u5386\u53f2\u7ed9\u8be5\u73a9\u5bb6(\u6309\u9700:\u8fdb\u5165\u5386\u53f2\u9762\u677f/\u5408\u6210\u6210\u529f\u540e\u8bf7\u6c42\u4e00\u6b21)\u3002 */
+    public void sendSynthesisHistoryToPlayer(ServerPlayer player) {
+        UUID playerId = player.getUUID();
+        BlockPos storagePos = this.playerOpenStorage.get(playerId);
+        if (storagePos == null) {
+            return;
+        }
+        CraftChestData storage = this.storageMap.get(storagePos);
+        if (storage == null) {
+            return;
+        }
+        List<CraftChestData.SynthesisHistoryEntry> history = storage.getSynthesisHistory();
+        StorageNetworkHandler.SynthesisHistoryPacket packet = new StorageNetworkHandler.SynthesisHistoryPacket(history);
+        NetworkManager.sendToPlayer(player, packet);
+    }
+
+    /** \u4ec5\u5f53\u5bb9\u5668\u6570\u636e\u6709\u53d8\u5316\u65f6\u624d\u91cd\u63a8\u7ed9\u73a9\u5bb6(\u4e0d\u91cd\u590d\u53d1\u73a9\u5bb6\u80cc\u5305)\u2014\u2014\u5468\u671f\u540c\u6b65\u7528,\u907f\u514d\u5e26\u5bbd\u6d6a\u8d39\u3002 */
+    public void syncStorageIfChanged(ServerPlayer player) {
+        CraftChestData storage;
+        UUID playerId = player.getUUID();
+        BlockPos storagePos = this.playerOpenStorage.get(playerId);
+        if (storagePos != null && (storage = this.storageMap.get(storagePos)) != null) {
+            int currentPage = this.playerLastPage.getOrDefault(playerId, 0);
+            String searchFilter = this.playerLastSearchFilter.getOrDefault(playerId, "");
+            this.sendStorageDataToPlayer(player, storage, currentPage, searchFilter);
         }
     }
 
