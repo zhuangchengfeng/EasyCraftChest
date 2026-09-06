@@ -309,9 +309,11 @@ public record TrySynthesisPacket(ItemStack targetItem, BlockPos storagePos, int 
             // 服务端权威记录:该方块"合成过哪个物品、谁合成的、何时"(每物品一条,存方块存档数据)。
             if (this.targetItem != null && !this.targetItem.isEmpty() && this.targetItem.getItem() != net.minecraft.world.item.Items.AIR) {
                 String historyKey = BuiltInRegistries.ITEM.getKey(this.targetItem.getItem()).toString();
-                storageData.recordSynthesis(historyKey, serverPlayer.getName().getString(), serverPlayer.getStringUUID());
+                storageData.recordSynthesis(historyKey, serverPlayer.getName().getString(), serverPlayer.getStringUUID(), this.synthesisCount);
             }
             storageManager.forceSyncAllViewers(serverPlayer);
+            // 合成历史也推给所有正打开该方块的玩家,保证多人在看时实时更新。
+            storageManager.pushSynthesisHistoryToViewers(serverPlayer);
             storageManager.setDirty();
             int producedCount = steps.get(steps.size() - 1).getOutputCount();
             TrySynthesisPacket.sendPlayerMessage(serverPlayer, Component.translatable("message.synthesis.success").append(this.targetItem.getHoverName()).append(Component.literal(" x" + producedCount)));

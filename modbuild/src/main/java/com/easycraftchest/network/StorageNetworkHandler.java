@@ -644,7 +644,8 @@ public class StorageNetworkHandler {
                 String name = buf.readUtf();
                 String uuid = buf.readUtf();
                 long t = buf.readLong();
-                list.add(new CraftChestData.SynthesisHistoryEntry(itemKey, name, uuid, t));
+                int c = buf.readInt();
+                list.add(new CraftChestData.SynthesisHistoryEntry(itemKey, name, uuid, t, c));
             }
             this.entries = list;
         }
@@ -656,6 +657,7 @@ public class StorageNetworkHandler {
                 buf.writeUtf(e.playerName == null ? "" : e.playerName);
                 buf.writeUtf(e.playerUuid == null ? "" : e.playerUuid);
                 buf.writeLong(e.timeMs);
+                buf.writeInt(e.count);
             }
         }
 

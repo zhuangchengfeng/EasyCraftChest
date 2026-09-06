@@ -624,6 +624,27 @@ extends SavedData {
         }
     }
 
+    /** \u5411"\u6b63\u6253\u5f00\u8be5\u5bb9\u5668"\u7684\u6240\u6709\u73a9\u5bb6\u63a8\u9001\u6700\u65b0\u5408\u6210\u5386\u53f2(\u542b\u53d1\u8d77\u8005)\u2014\u2014\u4fdd\u8bc1\u591a\u4eba\u5728\u770b\u65f6 B \u4e5f\u80fd\u5b9e\u65f6\u770b\u5230 A \u7684\u65b0\u5408\u6210\u3002 */
+    public void pushSynthesisHistoryToViewers(ServerPlayer requester) {
+        BlockPos target = this.playerOpenStorage.get(requester.getUUID());
+        if (target == null) {
+            return;
+        }
+        CraftChestData storage = this.storageMap.get(target);
+        if (storage == null) {
+            return;
+        }
+        List<CraftChestData.SynthesisHistoryEntry> history = storage.getSynthesisHistory();
+        StorageNetworkHandler.SynthesisHistoryPacket packet = new StorageNetworkHandler.SynthesisHistoryPacket(history);
+        net.minecraft.server.players.PlayerList list = requester.serverLevel().getServer().getPlayerList();
+        for (java.util.Map.Entry<UUID, BlockPos> e : new java.util.ArrayList<java.util.Map.Entry<UUID, BlockPos>>(this.playerOpenStorage.entrySet())) {
+            if (!target.equals(e.getValue())) continue;
+            ServerPlayer viewer = list.getPlayer(e.getKey());
+            if (viewer == null) continue;
+            NetworkManager.sendToPlayer(viewer, packet);
+        }
+    }
+
     public Map<String, Object> getStorageStats(BlockPos pos) {
         CraftChestData storage = this.storageMap.get(pos);
         HashMap<String, Object> stats = new HashMap<String, Object>();

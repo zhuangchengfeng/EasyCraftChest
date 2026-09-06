@@ -333,16 +333,16 @@ public class CraftChestData {
     }
 
     /** 记录一次成功合成:该物品若已有历史则刷新(移动为最新),超过上限删掉最旧一条。合成者用服务端时钟。 */
-    public void recordSynthesis(String itemKey, String playerName, String playerUuid) {
-        this.insertSynthesisHistory(itemKey, playerName, playerUuid, System.currentTimeMillis());
+    public void recordSynthesis(String itemKey, String playerName, String playerUuid, int count) {
+        this.insertSynthesisHistory(itemKey, playerName, playerUuid, System.currentTimeMillis(), count);
     }
 
     /** 插入/刷新一条历史,保留传入时间戳;超过上限删最旧。加载存档与实时记录共用。 */
-    private void insertSynthesisHistory(String itemKey, String playerName, String playerUuid, long timeMs) {
+    private void insertSynthesisHistory(String itemKey, String playerName, String playerUuid, long timeMs, int count) {
         if (itemKey == null || itemKey.isEmpty()) {
             return;
         }
-        SynthesisHistoryEntry entry = new SynthesisHistoryEntry(itemKey, playerName == null ? "" : playerName, playerUuid == null ? "" : playerUuid, timeMs);
+        SynthesisHistoryEntry entry = new SynthesisHistoryEntry(itemKey, playerName == null ? "" : playerName, playerUuid == null ? "" : playerUuid, timeMs, count);
         this.synthesisHistory.put(itemKey, entry);
         if (this.synthesisHistory.size() > CraftChestData.MAX_SYNTH_HISTORY) {
             this.evictOldestSynthesis();
@@ -381,12 +381,15 @@ public class CraftChestData {
         public final String playerName;
         public final String playerUuid;
         public final long timeMs;
+        /** 那次合成的次数(合成次数输入框的值)。 */
+        public final int count;
 
-        public SynthesisHistoryEntry(String itemKey, String playerName, String playerUuid, long timeMs) {
+        public SynthesisHistoryEntry(String itemKey, String playerName, String playerUuid, long timeMs, int count) {
             this.itemKey = itemKey;
             this.playerName = playerName;
             this.playerUuid = playerUuid;
             this.timeMs = timeMs;
+            this.count = count;
         }
     }
 
@@ -450,6 +453,7 @@ public class CraftChestData {
                 h.putString("N", e.playerName == null ? "" : e.playerName);
                 h.putString("U", e.playerUuid == null ? "" : e.playerUuid);
                 h.putLong("T", e.timeMs);
+                h.putInt("C", e.count);
                 historyTag.add((Tag)h);
             }
             tag.put("SynthHistory", (Tag)historyTag);
@@ -525,7 +529,8 @@ public class CraftChestData {
                     CompoundTag h = historyTag.getCompound(i);
                     String itemKey = h.getString("I");
                     if (itemKey.isEmpty()) continue;
-                    this.insertSynthesisHistory(itemKey, h.getString("N"), h.getString("U"), h.getLong("T"));
+                    int count = h.contains("C") ? h.getInt("C") : 1;
+                    this.insertSynthesisHistory(itemKey, h.getString("N"), h.getString("U"), h.getLong("T"), count);
                 }
                 catch (Exception e) {
                     LOGGER.error("Failed to load synthesis history entry at index: " + i + ", error: " + e.getMessage());

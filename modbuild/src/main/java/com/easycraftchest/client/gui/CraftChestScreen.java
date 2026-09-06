@@ -436,53 +436,139 @@ extends AbstractContainerScreen<CraftChestContainer> {
         }
     }
 
-    /** 渲染"合成历史"slot 的自定义 tooltip:物品名 + 玩家头像/名字 + 相对时间。 */
+    /**
+     * 渲染"合成历史"slot 的自定义 tooltip(仿 refinedstorage 的紧凑多行风格,自绘以规避 1.21 私有 internal API):
+     * 第1行:合成物品名(白,正常字号)
+     * 第2行(小字):<头像8> X前 · 由 玩家名 合成
+     * 第3行(小字):合成数量: <物品图标> 图标右下角显示那次合成的次数
+     * 头像固定 8×8,小字 0.75× 缩放,避免遮挡文字。
+     */
     private void renderHistoryTooltip(GuiGraphics graphics, int mouseX, int mouseY, ItemStack stack, CraftChestData.SynthesisHistoryEntry entry) {
-        java.util.List<Component> lines = new ArrayList<Component>();
-        lines.add(stack.getHoverName().copy().withStyle(net.minecraft.ChatFormatting.WHITE));
+        float smallScale = 0.75f;
+        String name = stack.getHoverName().getString();
         String rel = this.formatRelativeTime(entry.timeMs);
         String who = (entry.playerName == null || entry.playerName.isEmpty()) ? "?" : entry.playerName;
-        lines.add(Component.literal(who).withStyle(net.minecraft.ChatFormatting.AQUA).append(Component.literal("  " + rel).withStyle(net.minecraft.ChatFormatting.GRAY)));
-        graphics.renderComponentTooltip(this.font, lines, mouseX, mouseY);
-        // 玩家头像(8×8 正脸,缩放 2 倍显示在 tooltip 首行左侧)。取不到 PlayerInfo 就省略。
+        String metaA = rel + " · 由 ";
+        String metaB = who;
+        String metaC = " 合成";
+        String countLabel = "合成数量: ";
+        // 尺寸预算(小字按 0.75 缩放计宽)
+        int avatarSize = 8;
+        int pad = 4;
+        int lineGap = 2;
+        int nameW = this.font.width(name);
+        int row2W = avatarSize + 3 + (int)(this.font.width(metaA + metaB + metaC) * smallScale);
+        int countLabelW = (int)(this.font.width(countLabel) * smallScale);
+        int row3W = countLabelW + 4 + 16;
+        int contentW = Math.max(nameW, Math.max(row2W, row3W));
+        // 行高:第1行正常字高;第2行取头像与小字较高的;第3行以 16px 图标为主(再留一点给右下角数量)
+        int h1 = this.font.lineHeight;
+        int h2 = Math.max(avatarSize, (int)(this.font.lineHeight * smallScale));
+        int h3 = 18;
+        int boxH = pad + h1 + lineGap + h2 + lineGap + h3 + pad;
+        int boxW = contentW + pad * 2;
+        // 定位在鼠标右下方;超屏则左/上回退
+        int tx = mouseX + 12;
+        int ty = mouseY + 8;
+        if (tx + boxW > this.width - 2) {
+            tx = Math.max(2, mouseX - 12 - boxW);
+        }
+        if (ty + boxH > this.height - 2) {
+            ty = Math.max(2, mouseY - 8 - boxH);
+        }
+        this.drawTooltipBox(graphics, tx, ty, boxW, boxH);
+        int x = tx + pad;
+        int y = ty + pad;
+        // 第1行:物品名
+        graphics.drawString(this.font, name, x, y, 0xFFFFFF, true);
+        y += h1 + lineGap;
+        // 第2行:头像 + 小字
+        ResourceLocation skin = this.getPlayerSkin(entry.playerUuid);
+        int textY = y + (h2 - (int)(this.font.lineHeight * smallScale)) / 2;
+        if (skin != null) {
+            this.drawPlayerFace(graphics, skin, x, y + (h2 - avatarSize) / 2, avatarSize);
+        }
+        int txx = x + avatarSize + 3;
+        this.drawSmallText(graphics, metaA, txx, textY, 0xA0A0A0, smallScale);
+        txx += (int)(this.font.width(metaA) * smallScale);
+        this.drawSmallText(graphics, metaB, txx, textY, 0x7FFFD4, smallScale);
+        txx += (int)(this.font.width(metaB) * smallScale);
+        this.drawSmallText(graphics, metaC, txx, textY, 0xA0A0A0, smallScale);
+        y += h2 + lineGap;
+        // 第3行:小标签 + 物品图标;数量按 RS ResourceSlotRendering.renderAmount 的方式自绘
+        // (白色带阴影、右对齐、z≈300),而不是依赖 MC renderItemDecorations(count==1 不画/自定义 tooltip 里不可见)。
+        int iconY = y + Math.max(0, (h3 - 16) / 2);
+        this.drawSmallText(graphics, countLabel, x, iconY + 4, 0xA0A0A0, smallScale);
+        int iconX = x + countLabelW + 4;
+        ItemStack countStack = stack.copy();
+        countStack.setCount(Math.max(1, entry.count));
+        graphics.renderItem(countStack, iconX, iconY);
+        this.drawAmountOnIcon(graphics, String.valueOf(entry.count), iconX, iconY);
+    }
+
+    /** RS 风格:在物品图标上画数量(白色带阴影),数量很小也强制显示。 */
+    private void drawAmountOnIcon(GuiGraphics graphics, String amount, int iconX, int iconY) {
+        if (amount == null || amount.isEmpty()) {
+            return;
+        }
+        int stringWidth = this.font.width(amount);
+        graphics.pose().pushPose();
+        graphics.pose().translate(iconX, iconY, 300.0f);
+        // 数字能在 16px 内放下就不缩放;放不下再按 0.5 缩放,保证始终可见
+        if (stringWidth > 14) {
+            graphics.pose().scale(0.5f, 0.5f, 1.0f);
+            graphics.drawString(this.font, amount, (float)((30 - stringWidth) * 1), 22, 0xFFFFFF, true);
+        } else {
+            graphics.drawString(this.font, amount, 17 - stringWidth, 8, 0xFFFFFF, true);
+        }
+        graphics.pose().popPose();
+    }
+
+    /** MC/RS 风格 tooltip 底色 + 边框。 */
+    private void drawTooltipBox(GuiGraphics graphics, int x, int y, int w, int h) {
+        graphics.fill(x, y, x + w, y + h, 0xF0100010);
+        graphics.fill(x, y, x + w, y + 1, 0x505000FF);
+        graphics.fill(x, y + h - 1, x + w, y + h, 0x5028007F);
+        graphics.fill(x, y, x + 1, y + h, 0x505000FF);
+        graphics.fill(x + w - 1, y, x + w, y + h, 0x5028007F);
+    }
+
+    /** 缩放画小字(缩到 smallScale×,自带阴影)。 */
+    private void drawSmallText(GuiGraphics graphics, String text, int x, int y, int color, float smallScale) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        graphics.pose().pushPose();
+        graphics.pose().translate(x, y, 0.0f);
+        graphics.pose().scale(smallScale, smallScale, 1.0f);
+        graphics.drawString(this.font, text, 0, 0, color, true);
+        graphics.pose().popPose();
+    }
+
+    /** 取玩家皮肤贴图(本地 PlayerInfo 缓存,拿不到返回 null,不请求网络)。 */
+    private ResourceLocation getPlayerSkin(String playerUuid) {
         try {
-            UUID playerUuid = entry.playerUuid == null || entry.playerUuid.isEmpty() ? null : UUID.fromString(entry.playerUuid);
-            if (playerUuid != null && this.minecraft != null && this.minecraft.getConnection() != null) {
-                PlayerInfo info = this.minecraft.getConnection().getPlayerInfo(playerUuid);
-                if (info != null && info.getSkin() != null && info.getSkin().texture() != null) {
-                    // 头像绘制在 tooltip 上方左侧;皮肤贴图正脸在 64×64 中的 (8,8)-(16,16) 区域。
-                    int faceSize = 16;
-                    int ax = mouseX + 10;
-                    int ay = mouseY - 8 - faceSize;
-                    this.drawSkinFace(graphics, info.getSkin().texture(), ax, ay, faceSize);
-                }
+            UUID uuid = playerUuid == null || playerUuid.isEmpty() ? null : UUID.fromString(playerUuid);
+            if (uuid == null || this.minecraft == null || this.minecraft.getConnection() == null) {
+                return null;
             }
+            PlayerInfo info = this.minecraft.getConnection().getPlayerInfo(uuid);
+            if (info == null || info.getSkin() == null) {
+                return null;
+            }
+            return info.getSkin().texture();
         }
         catch (Exception e) {
-            // 头像渲染失败不影响 tooltip 文本
+            return null;
         }
     }
 
-    /** 画玩家皮肤正脸 8×8 区域(缩放至 size×size)。 */
-    private void drawSkinFace(GuiGraphics graphics, ResourceLocation skin, int x, int y, int size) {
+    /** 画玩家皮肤正脸 8×8 子区域(缩放至 size×size);贴图在 64×64 中的 (8,8)-(16,16)。 */
+    private void drawPlayerFace(GuiGraphics graphics, ResourceLocation skin, int x, int y, int size) {
         if (skin == null) {
             return;
         }
-        com.mojang.blaze3d.systems.RenderSystem.enableBlend();
-        com.mojang.blaze3d.systems.RenderSystem.defaultBlendFunc();
-        com.mojang.blaze3d.systems.RenderSystem.setShaderTexture(0, skin);
-        com.mojang.blaze3d.systems.RenderSystem.setShader(net.minecraft.client.renderer.GameRenderer::getPositionTexShader);
-        float u0 = 8.0f / 64.0f;
-        float v0 = 8.0f / 64.0f;
-        float u1 = 16.0f / 64.0f;
-        float v1 = 16.0f / 64.0f;
-        com.mojang.blaze3d.vertex.Tesselator tess = com.mojang.blaze3d.vertex.Tesselator.getInstance();
-        com.mojang.blaze3d.vertex.BufferBuilder buffer = tess.begin(com.mojang.blaze3d.vertex.VertexFormat.Mode.QUADS, com.mojang.blaze3d.vertex.DefaultVertexFormat.POSITION_TEX);
-        buffer.addVertex(x, y, 0.0f).setUv(u0, v0);
-        buffer.addVertex(x, y + size, 0.0f).setUv(u0, v1);
-        buffer.addVertex(x + size, y + size, 0.0f).setUv(u1, v1);
-        buffer.addVertex(x + size, y, 0.0f).setUv(u1, v0);
-        com.mojang.blaze3d.vertex.BufferUploader.drawWithShader(buffer.build());
+        graphics.blit(skin, x, y, 8.0f, 8.0f, size, size, 64, 64);
     }
 
     /** 把毫秒时间差格式化为"X秒前/X分钟前/X小时前/X天前"。 */
@@ -1174,16 +1260,14 @@ extends AbstractContainerScreen<CraftChestContainer> {
         this.catalogFilteredItems.clear();
         this.catalogHistoryEntries.clear();
         // 合成历史模式:右上目录换成"本方块合成过的物品"(服务端权威),按最近成功合成时间倒序,最新在前。
+        // 注意:历史面板不受搜索词影响,始终显示全部(最多一页54)。
         if (this.catalogHistoryMode) {
             for (CraftChestData.SynthesisHistoryEntry entry : this.serverHistory) {
                 String id = entry == null ? null : entry.itemKey;
                 if (id == null || id.isEmpty()) continue;
                 Item item = BuiltInRegistries.ITEM.get(ResourceLocation.tryParse(id));
                 if (item == null || item == Items.AIR) continue;
-                ItemStack stack = new ItemStack(item);
-                // 搜索范围:仅仓库栏时,目录(配方栏)不过滤
-                if (this.searchScope != SearchScope.STORAGE_ONLY && !ItemCatalog.matchesSearchFilter(stack, this.searchFilter)) continue;
-                this.catalogFilteredItems.add(stack);
+                this.catalogFilteredItems.add(new ItemStack(item));
                 this.catalogHistoryEntries.add(entry);
             }
         } else {

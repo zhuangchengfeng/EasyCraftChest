@@ -359,7 +359,15 @@ public class RecipeView {
         this.panelX = px;
         this.panelY = py;
         int ry = py + 8 + 54 + 16;
-        this.synthesisCountField = new EditBox(font, px + 8, ry, 36, 16, Component.translatable("gui.easycraftchest.count_field"));
+        // 点击次数框获得焦点时自动全选,方便直接输入新数字(参考原版数量框习惯)。
+        this.synthesisCountField = new EditBox(font, px + 8, ry, 36, 16, Component.translatable("gui.easycraftchest.count_field")) {
+            public void setFocused(boolean focused) {
+                super.setFocused(focused);
+                if (focused) {
+                    RecipeView.selectAll(RecipeView.this.synthesisCountField);
+                }
+            }
+        };
         this.synthesisCountField.setValue("1");
         this.synthesisCountField.setMaxLength(3);
         this.synthesisCountField.setFilter(text -> {
@@ -801,6 +809,19 @@ public class RecipeView {
             }
         }
         this.synthesisCountField.setValue("1");
+    }
+
+    /** 选中次数框全部文本,方便直接覆盖输入新数字。 */
+    private static void selectAll(EditBox field) {
+        if (field == null) {
+            return;
+        }
+        String value = field.getValue();
+        if (value == null) {
+            value = "";
+        }
+        field.setCursorPosition(value.length());
+        field.setHighlightPos(0);
     }
 
     /** 右键快捷合成:直接按当前合成次数输入框的值发起一次合成(失败也会显示提示)。 */
